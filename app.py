@@ -3,7 +3,6 @@ import pandas as pd
 import re
 import io
 import os
-import requests
 from datetime import datetime
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image
@@ -16,24 +15,6 @@ BULAN_INDO = {
     5: "MEI", 6: "JUNI", 7: "JULI", 8: "AGUSTUS",
     9: "SEPTEMBER", 10: "OKTOBER", 11: "NOVEMBER", 12: "DESEMBER"
 }
-
-# --- FUNGSI AMBIL LOGO (MENGEMBALIKAN RAW BYTES) ---
-def get_bmkg_logo_bytes():
-    if os.path.exists("logo_bmkg.png"):
-        with open("logo_bmkg.png", "rb") as f:
-            return f.read()
-        
-    url = "https://upload.wikimedia.org/wikipedia/commons/1/12/Logo_BMKG_%282010%29.png"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            return response.content
-    except Exception:
-        pass
-    return None
 
 # --- FUNGSI PARSING SANDI METAR ---
 def parse_metar(sandi_str):
@@ -60,7 +41,7 @@ def parse_metar(sandi_str):
                 vis = t
             elif t in ['RA', 'DZ', 'SHRA', 'TSRA', 'TS', 'BR', 'HZ', 'FG', '-RA', '+RA']:
                 wx = t
-            elif re.match(r'^(FEW|SCT|BKN|OVC)\d{3}$', t) or t == 'NSC' or t == 'SKC':
+            elif re.match(r'^(FEW|SCT|BKN|OVC)\d{3}$', t) or re.match(r'^NSC$', t) or re.match(r'^SKC$', t):
                 cloud_list.append(t)
             elif re.match(r'^\d{2}/\d{2}$', t) or re.match(r'^M\d{2}/\d{2}$', t):
                 t_dp = t
@@ -74,7 +55,7 @@ def parse_metar(sandi_str):
     return [metar, loc, time_str, wind, vis, wx, cloud, t_dp, qnh, rmk]
 
 # --- FUNGSI GENERATE PDF ---
-def generate_pdf_bytes(df_clean, logo_bytes):
+def generate_pdf_bytes(df_clean, logo_path):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer, 
@@ -126,20 +107,17 @@ def generate_pdf_bytes(df_clean, logo_bytes):
             Paragraph(f"<b>{nama_stasiun}</b>", header_text_style),
         ]
         
-        if logo_bytes:
-            fresh_logo_stream = io.BytesIO(logo_bytes)
-            # PENYESUAIAN: Logo dinaikkan ke 50x50 agar proporsional
-            logo_img = Image(fresh_logo_stream, width=50, height=50)
-            
-            # PENYESUAIAN: Lebar kolom diseimbangkan [60, 420, 60] agar teks center absolut pada halaman
+        # Menggunakan file lokal langsung (Sangat aman dari kebocoran memori/Segmentation fault)
+        if logo_path and os.path.exists(logo_path):
+            logo_img = Image(logo_path, width=50, height=50)
             header_table = Table([[logo_img, text_block, ""]], colWidths=[60, 420, 60])
             header_table.setStyle(TableStyle([
                 ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-                ('ALIGN', (0,0), (0,0), 'CENTER'),   # Logo rata tengah di dalam kolomnya
-                ('ALIGN', (1,0), (1,0), 'CENTER'),   # Teks rata tengah
-                ('BOTTOMPADDING', (0,0), (-1,-1), 8), # Jarak bawah sebelum garis
+                ('ALIGN', (0,0), (0,0), 'CENTER'),
+                ('ALIGN', (1,0), (1,0), 'CENTER'),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 8),
                 ('TOPPADDING', (0,0), (-1,-1), 2),
-                ('LINEBELOW', (0,0), (-1,-1), 1.5, colors.black), # GARIS KOP SURAT TEBAL RESMI
+                ('LINEBELOW', (0,0), (-1,-1), 1.5, colors.black),
             ]))
         else:
             header_table = Table([[text_block]], colWidths=[540])
@@ -151,7 +129,7 @@ def generate_pdf_bytes(df_clean, logo_bytes):
             ]))
             
         story.append(header_table)
-        story.append(Spacer(1, 15)) # Jarak aman dari garis kop ke judul rekap
+        story.append(Spacer(1, 15))
         
         judul_rekap = f"REKAP DATA METAR: {tanggal_format}".upper()
         story.append(Paragraph(f"<b>{judul_rekap}</b>", rekap_style))
@@ -186,7 +164,12 @@ st.set_page_config(page_title="METAR PDF Generator", layout="centered")
 st.title("✈️ METAR to PDF Converter")
 st.write("Aplikasi pengubah otomatis extract data CSV METAR menjadi PDF formal per jam (00-23 UTC) dengan layout Kop Surat Resmi.")
 
-logo_bytes = get_bmkg_logo_bytes()
+# Path file lokal Anda
+LOGO_FILE = "logo_bmkg.png"
+
+# Peringatan di halaman web jika Anda lupa memasukkan filenya di folder GitHub
+if not os.path.exists(LOGO_FILE):
+    st.warning(f"⚠️ File gambar '{LOGO_FILE}' tidak terdeteksi di folder utama. Harap pastikan file logo sudah di-upload ke GitHub.")
 
 uploaded_file = st.file_uploader("Upload file CSV hasil extract sistem Anda", type=["csv"])
 
@@ -197,7 +180,7 @@ if uploaded_file is not None:
         if 'sandi' not in df.columns or 'data_timestamp' not in df.columns:
             st.error("Format CSV tidak sesuai! Pastikan terdapat kolom 'sandi' dan 'data_timestamp'.")
         else:
-            with st.spinner("Sedang memproses data..."):
+            with st.spinner("Sedang memproses seluruh data METAR... Mohon tunggu sebentar."):
                 parsed_rows = []
                 for idx, row in df.iterrows():
                     res = parse_metar(row['sandi'])
@@ -218,12 +201,12 @@ if uploaded_file is not None:
                 if df_clean.empty:
                     st.warning("Tidak ditemukan data dengan menit :00 (per jam) di dalam file ini.")
                 else:
-                    st.success(f"Berhasil! Data per jam siap diunduh.")
+                    st.success(f"Berhasil memproses {len(df_clean)} baris data per jam!")
                     
                     st.subheader("Preview Data (Hanya Jam Genap)")
-                    st.dataframe(df_clean[['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'CLOUD', 'T/DP', 'QNH']].head(10), use_container_width=True)
+                    st.dataframe(df_clean[['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'CLOUD', 'T/DP', 'QNH']].head(10), width='stretch')
                     
-                    pdf_data = generate_pdf_bytes(df_clean, logo_bytes)
+                    pdf_data = generate_pdf_bytes(df_clean, LOGO_FILE)
                     
                     first_date = df_clean['date_group'].iloc[0]
                     nama_file_pdf = f"REKAP_METAR_{first_date.day:02d}_{BULAN_INDO[first_date.month]}_{first_date.year}.pdf"
