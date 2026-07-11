@@ -16,63 +16,97 @@ BULAN_INDO = {
     9: "SEPTEMBER", 10: "OKTOBER", 11: "NOVEMBER", 12: "DESEMBER"
 }
 
-# --- FUNGSI PARSING SANDI METAR ---
+# --- FUNGSI PARSING DENGAN DETEKSI KOREKSI (COR / CCA / CCB) ---
 def parse_metar(sandi_str):
     if pd.isna(sandi_str):
         return None
     sandi_str = sandi_str.replace('\n', ' ').replace('\r', '').strip()
-    match_main = re.search(r'(METAR\s+\w+\s+\d+Z.*)', sandi_str)
-    if not match_main:
-        return None
     
-    metar_core = match_main.group(1).replace('=', '').strip()
+    # Cari posisi awal kata METAR
+    start_idx = sandi_str.find('METAR')
+    if start_idx == -1:
+        return None
+        
+    metar_core = sandi_str[start_idx:].replace('=', '').strip()
     tokens = metar_core.split()
     
     metar, loc, time_str, wind, vis, wx, cloud, t_dp, qnh, rmk = "METAR", "NIL", "NIL", "NIL", "NIL", "NIL", "NIL", "NIL", "NIL", "NOSIG"
     
-    if len(tokens) >= 3:
-        metar, loc, time_str = tokens[0], tokens[1], tokens[2]
-        remaining = tokens[3:]
-        
-        if 'CAVOK' in remaining:
-            vis = 'CAVOK'
-            wx = ''      
-            cloud = ''   
-            for t in remaining:
-                if re.match(r'^\d{5}(G\d{2})?KT$', t) or re.match(r'^VRB\d{2}KT$', t) or t == '00000KT':
-                    wind = t
-                elif re.match(r'^\d{2}/\d{2}$', t) or re.match(r'^M\d{2}/\d{2}$', t):
-                    t_dp = t
-                elif re.match(r'^Q\d{4}$', t):
-                    qnh = t
-                elif t in ['NOSIG', 'TEMPO', 'BECMG']:
-                    rmk = t
+    # Flag indikator koreksi data
+    is_cor = False
+    cc_type = ""
+    
+    remaining_tokens = []
+    
+    # Fase 1: Identifikasi struktur utama dan flag koreksi
+    for t in tokens:
+        if t == 'METAR':
+            continue
+        elif t == 'COR':
+            is_cor = True
+            continue
+        elif re.match(r'^CC[A-Z]$', t):
+            cc_type = t.upper()
+            continue
+        elif re.match(r'^[A-Z]{4}$', t) and loc == "NIL":
+            loc = t
+            continue
+        elif re.match(r'^\d{6}Z$', t) and time_str == "NIL":
+            time_str = t
+            continue
         else:
-            cloud_list = []
-            for t in remaining:
-                if re.match(r'^\d{5}(G\d{2})?KT$', t) or re.match(r'^VRB\d{2}KT$', t) or t == '00000KT':
-                    wind = t
-                elif re.match(r'^\d{4}$', t):
-                    vis = t
-                elif t in ['RA', 'DZ', 'SHRA', 'TSRA', 'TS', 'BR', 'HZ', 'FG', '-RA', '+RA']:
-                    wx = t
-                elif re.match(r'^(FEW|SCT|BKN|OVC)\d{3}$', t) or t in ['NSC', 'SKC', 'CLR']:
-                    cloud_list.append(t)
-                elif re.match(r'^\d{2}/\d{2}$', t) or re.match(r'^M\d{2}/\d{2}$', t):
-                    t_dp = t
-                elif re.match(r'^Q\d{4}$', t):
-                    qnh = t
-                elif t in ['NOSIG', 'TEMPO', 'BECMG']:
-                    rmk = t
-            if cloud_list:
-                cloud = " ".join(cloud_list)
+            remaining_tokens.append(t)
             
-    return [metar, loc, time_str, wind, vis, wx, cloud, t_dp, qnh, rmk]
+    # Fase 2: Ekstraksi elemen cuaca penerbangan
+    if 'CAVOK' in remaining_tokens:
+        vis = 'CAVOK'
+        wx = ''      
+        cloud = ''   
+        for t in remaining_tokens:
+            if re.match(r'^\d{5}(G\d{2})?KT$', t) or re.match(r'^VRB\d{2}KT$', t) or t == '00000KT':
+                wind = t
+            elif re.match(r'^\d{2}/\d{2}$', t) or re.match(r'^M\d{2}/\d{2}$', t):
+                t_dp = t
+            elif re.match(r'^Q\d{4}$', t):
+                qnh = t
+            elif t in ['NOSIG', 'TEMPO', 'BECMG']:
+                rmk = t
+    else:
+        cloud_list = []
+        for t in remaining_tokens:
+            if re.match(r'^\d{5}(G\d{2})?KT$', t) or re.match(r'^VRB\d{2}KT$', t) or t == '00000KT':
+                wind = t
+            elif re.match(r'^\d{4}$', t):
+                vis = t
+            elif t in ['RA', 'DZ', 'SHRA', 'TSRA', 'TS', 'BR', 'HZ', 'FG', '-RA', '+RA']:
+                wx = t
+            elif re.match(r'^(FEW|SCT|BKN|OVC)\d{3}$', t) or t in ['NSC', 'SKC', 'CLR']:
+                cloud_list.append(t)
+            elif re.match(r'^\d{2}/\d{2}$', t) or re.match(r'^M\d{2}/\d{2}$', t):
+                t_dp = t
+            elif re.match(r'^Q\d{4}$', t):
+                qnh = t
+            elif t in ['NOSIG', 'TEMPO', 'BECMG']:
+                rmk = t
+        if cloud_list:
+            cloud = " ".join(cloud_list)
+            
+    return [metar, loc, time_str, wind, vis, wx, cloud, t_dp, qnh, rmk, is_cor, cc_type]
+
+# --- FUNGSI HITUNG BOBOT PRIORITAS DATA ---
+def calculate_priority(row):
+    score = 0
+    if row['is_cor']:
+        score = 1
+    if row['cc_type'] and len(row['cc_type']) == 3:
+        # CCA -> 2, CCB -> 3, CCC -> 4, dan seterusnya secara berurutan
+        char_code = ord(row['cc_type'][2]) - ord('A')
+        score = max(score, 2 + char_code)
+    return score
 
 # --- FUNGSI GENERATE PDF ---
 def generate_pdf_bytes(df_clean, logo_path):
     buffer = io.BytesIO()
-    
     doc = SimpleDocTemplate(
         buffer, 
         pagesize=letter,
@@ -81,23 +115,11 @@ def generate_pdf_bytes(df_clean, logo_path):
     story = []
     
     styles = getSampleStyleSheet()
-    
     header_text_style = ParagraphStyle(
-        'HeaderCenterText',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=11,
-        leading=15,
-        alignment=1
+        'HeaderCenterText', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=11, leading=15, alignment=1
     )
-    
     rekap_style = ParagraphStyle(
-        'RekapStyle', 
-        parent=styles['Heading2'], 
-        fontName='Helvetica-Bold',
-        fontSize=11, 
-        leading=14, 
-        alignment=1
+        'RekapStyle', parent=styles['Heading2'], fontName='Helvetica-Bold', fontSize=11, leading=14, alignment=1
     )
     
     nama_stasiun = df_clean['station_name'].iloc[0].upper() if 'station_name' in df_clean.columns else "STASIUN METEOROLOGI"
@@ -160,7 +182,6 @@ def generate_pdf_bytes(df_clean, logo_path):
         
         for idx, row in group.iterrows():
             current_row_idx = len(table_data)
-            
             if row['VIS'] == 'CAVOK':
                 row_data = [
                     str(row['METAR']), str(row['LOC']), str(row['TIME']), str(row['WIND']),
@@ -170,11 +191,9 @@ def generate_pdf_bytes(df_clean, logo_path):
                 base_table_style.append(('SPAN', (4, current_row_idx), (6, current_row_idx)))
             else:
                 row_data = [str(row[h]) for h in headers]
-                
             table_data.append(row_data)
             
         col_widths = [45, 40, 55, 75, 42, 40, 105, 45, 50, 65]
-        
         metar_table = Table(table_data, colWidths=col_widths)
         metar_table.setStyle(TableStyle(base_table_style))
         story.append(metar_table)
@@ -187,7 +206,7 @@ def generate_pdf_bytes(df_clean, logo_path):
 st.set_page_config(page_title="METAR PDF Generator", layout="centered")
 
 st.title("✈️ METAR to PDF Converter")
-st.write("Aplikasi pengubah otomatis extract data CSV METAR menjadi PDF formal per jam (00-23 UTC) dengan penyaringan data duplikat terbaru.")
+st.write("Aplikasi pengubah otomatis extract data CSV METAR menjadi PDF formal per jam (00-23 UTC) dengan penyaringan hierarki COR/CCA/CCB resmi.")
 
 LOGO_FILE = "logo_bmkg.png"
 
@@ -201,43 +220,48 @@ if uploaded_file is not None:
         df = pd.read_csv(uploaded_file)
         
         if 'sandi' not in df.columns or 'data_timestamp' not in df.columns:
-            st.error("Format CSV tidak sesuai! Pastikan terdapat kolom 'sandi' dan 'data_timestamp'.")
+            st.error("Format CSV tidak sesuai! Pastikan terdapat kolom 'sandi' and 'data_timestamp'.")
         else:
-            with st.spinner("Sedang memproses dan menyaring data terbaru..."):
+            with st.spinner("Sedang melakukan validasi data berdasarkan hierarki pembaruan resmi..."):
                 parsed_rows = []
                 for idx, row in df.iterrows():
                     res = parse_metar(row['sandi'])
                     if res:
                         station = row['station_name'] if 'station_name' in df.columns else "STASIUN METEOROLOGI"
                         msg_id = row['id'] if 'id' in df.columns else idx
-                        # KUNCI 1: Ikut sertakan 'msg_id' asli untuk mendeteksi data kiriman paling akhir
                         parsed_rows.append(res + [row['data_timestamp'], station, msg_id])
                         
-                columns = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK', 'raw_timestamp', 'station_name', 'msg_id']
+                columns = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK', 'is_cor', 'cc_type', 'raw_timestamp', 'station_name', 'msg_id']
                 df_clean = pd.DataFrame(parsed_rows, columns=columns)
                 
                 df_clean['raw_timestamp'] = df_clean['raw_timestamp'].str.replace(" +0000 UTC", "", regex=False)
                 df_clean['datetime'] = pd.to_datetime(df_clean['raw_timestamp'])
                 
-                # Filter menit berkembar :00 saja (per jam)
+                # Filter menit genap :00 saja (per jam)
                 df_clean = df_clean[df_clean['datetime'].dt.minute == 0]
                 
-                # KUNCI 2: Urutkan berdasarkan ID pesan terkecil ke terbesar
-                df_clean = df_clean.sort_values(by='msg_id')
+                # Hitung kolom Bobot Prioritas data
+                df_clean['priority_score'] = df_clean.apply(calculate_priority, axis=1)
                 
-                # KUNCI 3: Buang duplikat pada jam yang sama, sisakan hanya yang terakhir masuk (keep='last')
+                # URUTAN SORTING CERDAS: 
+                # 1. Kronologis Waktu (datetime)
+                # 2. Tingkat Koreksi Sandi (priority_score: CCB > CCA > COR > Normal)
+                # 3. Urutan Pengiriman Sistem (msg_id terbaru)
+                df_clean = df_clean.sort_values(by=['datetime', 'priority_score', 'msg_id'])
+                
+                # Buang data duplikat jam, pertahankan baris dengan kasta paling tinggi & paling baru
                 df_clean = df_clean.drop_duplicates(subset=['datetime'], keep='last')
                 
-                # KUNCI 4: Kembalikan urutan kronologis waktu untuk kebutuhan pembagian halaman PDF
+                # Siapkan grup tanggal
                 df_clean['date_group'] = df_clean['datetime'].dt.date
                 df_clean = df_clean.sort_values(by='datetime').reset_index(drop=True)
                 
                 if df_clean.empty:
                     st.warning("Tidak ditemukan data dengan menit :00 (per jam) di dalam file ini.")
                 else:
-                    st.success(f"Berhasil menyaring data! Siap diunduh.")
+                    st.success(f"Berhasil! Data telah disaring ketat berdasarkan aturan koreksi meteorologi.")
                     
-                    st.subheader("Preview Data Terkini (Bebas Duplikat)")
+                    st.subheader("Preview Data Tervalidasi")
                     st.dataframe(df_clean[['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'CLOUD', 'T/DP', 'QNH']].head(10), width='stretch')
                     
                     pdf_data = generate_pdf_bytes(df_clean, LOGO_FILE)
