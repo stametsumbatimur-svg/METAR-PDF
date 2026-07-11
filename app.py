@@ -9,11 +9,17 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
+# --- DICTIONARY BULAN BAHASA INDONESIA (KAPITAL) ---
+BULAN_INDO = {
+    1: "JANUARI", 2: "FEBRUARI", 3: "MARET", 4: "APRIL",
+    5: "MEI", 6: "JUNI", 7: "JULI", 8: "AGUSTUS",
+    9: "SEPTEMBER", 10: "OKTOBER", 11: "NOVEMBER", 12: "DESEMBER"
+}
+
 # --- FUNGSI DOWNLOAD LOGO BMKG DENGAN CACHE ---
 @st.cache_data
 def download_bmkg_logo():
-    """Mengunduh logo resmi BMKG dari Wikipedia Commons secara aman untuk PDF"""
-    url = "https://upload.wikimedia.org/wikipedia/commons/thumb/b/ba/Logo_BMKG_%282010%29.svg/120px-Logo_BMKG_%282010%29.svg.png"
+    url = "https://upload.wikimedia.org/wikipedia/commons/1/12/Logo_BMKG_%282010%29.png"
     try:
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
@@ -72,14 +78,13 @@ def generate_pdf_bytes(df_clean, logo_bytes):
     
     styles = getSampleStyleSheet()
     
-    # Style Teks Header Kop Surat (Center)
     header_text_style = ParagraphStyle(
         'HeaderCenterText',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
         fontSize=11,
         leading=14,
-        alignment=1  # 1 = Center Alignment
+        alignment=1
     )
     
     rekap_style = ParagraphStyle(
@@ -88,7 +93,7 @@ def generate_pdf_bytes(df_clean, logo_bytes):
         fontName='Helvetica-Bold',
         fontSize=11, 
         leading=14, 
-        alignment=1  # 1 = Center Alignment
+        alignment=1
     )
     
     table_text_style = ParagraphStyle(
@@ -106,18 +111,17 @@ def generate_pdf_bytes(df_clean, logo_bytes):
         if count > 0:
             story.append(PageBreak())
             
-        tanggal_format = date.strftime('%d %B %Y')
+        # --- FORMAT TANGGAL INDONESIA & UPPERCASE ---
+        nama_bulan = BULAN_INDO[date.month]
+        tanggal_format = f"{date.day:02d} {nama_bulan} {date.year}"
         
-        # Wadah Teks Kop Surat
         text_block = [
             Paragraph("<b>BADAN METEOROLOGI KLIMATOLOGI DAN GEOFISIKA</b>", header_text_style),
             Paragraph(f"<b>{nama_stasiun}</b>", header_text_style),
         ]
         
-        # Konstruksi Header menggunakan Tabel 3-Kolom agar teks benar-benar center sempurna di halaman
         if logo_bytes:
             logo_img = Image(io.BytesIO(logo_bytes), width=45, height=45)
-            # Kolom 1 (Logo): 50pt, Kolom 2 (Teks): 440pt, Kolom 3 (Kosong penyeimbang): 50pt -> Total 540pt (Lebar cetak Letter)
             header_table = Table([[logo_img, text_block, ""]], colWidths=[50, 440, 50])
             header_table.setStyle(TableStyle([
                 ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
@@ -127,7 +131,6 @@ def generate_pdf_bytes(df_clean, logo_bytes):
                 ('TOPPADDING', (0,0), (-1,-1), 0),
             ]))
         else:
-            # Fallback jika internet putus/gagal download logo
             header_table = Table([[text_block]], colWidths=[540])
             header_table.setStyle(TableStyle([
                 ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
@@ -137,11 +140,11 @@ def generate_pdf_bytes(df_clean, logo_bytes):
         story.append(header_table)
         story.append(Spacer(1, 15))
         
-        # Judul Rekap Data METAR (Center)
-        story.append(Paragraph(f"<b>REKAP DATA METAR: {tanggal_format}</b>", rekap_style))
+        # Teks Judul Rekap dipaksa Kapital Sempurna (.upper())
+        judul_rekap = f"REKAP DATA METAR: {tanggal_format}".upper()
+        story.append(Paragraph(f"<b>{judul_rekap}</b>", rekap_style))
         story.append(Spacer(1, 10))
         
-        # Tabel Data Utama
         headers = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK']
         table_data = [[Paragraph(f"<b>{h}</b>", table_text_style) for h in headers]]
         
@@ -171,7 +174,6 @@ st.set_page_config(page_title="METAR PDF Generator", layout="centered")
 st.title("✈️ METAR to PDF Converter")
 st.write("Aplikasi pengubah otomatis extract data CSV METAR menjadi PDF formal per jam (00-23 UTC) dengan layout Kop Surat Resmi.")
 
-# Unduh logo di background aplikasi
 logo_bytes = download_bmkg_logo()
 
 uploaded_file = st.file_uploader("Upload file CSV hasil extract sistem Anda", type=["csv"])
@@ -183,7 +185,7 @@ if uploaded_file is not None:
         if 'sandi' not in df.columns or 'data_timestamp' not in df.columns:
             st.error("Format CSV tidak sesuai! Pastikan terdapat kolom 'sandi' dan 'data_timestamp'.")
         else:
-            with st.spinner("Sedang memproses data dan menyusun Kop Surat..."):
+            with st.spinner("Sedang memproses data..."):
                 parsed_rows = []
                 for idx, row in df.iterrows():
                     res = parse_metar(row['sandi'])
@@ -194,11 +196,9 @@ if uploaded_file is not None:
                 columns = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK', 'raw_timestamp', 'station_name']
                 df_clean = pd.DataFrame(parsed_rows, columns=columns)
                 
-                # Bersihkan "+0000 UTC"
                 df_clean['raw_timestamp'] = df_clean['raw_timestamp'].str.replace(" +0000 UTC", "", regex=False)
                 df_clean['datetime'] = pd.to_datetime(df_clean['raw_timestamp'])
                 
-                # Filter menit berkembar :00 saja (per jam)
                 df_clean = df_clean[df_clean['datetime'].dt.minute == 0]
                 df_clean['date_group'] = df_clean['datetime'].dt.date
                 df_clean = df_clean.sort_values(by='datetime').reset_index(drop=True)
@@ -211,13 +211,16 @@ if uploaded_file is not None:
                     st.subheader("Preview Data (Hanya Jam Genap)")
                     st.dataframe(df_clean[['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'CLOUD', 'T/DP', 'QNH']].head(10), use_container_width=True)
                     
-                    # Buat PDF
                     pdf_data = generate_pdf_bytes(df_clean, logo_bytes)
+                    
+                    # Dinamis mengambil nama file download berformat kapital Indonesia
+                    first_date = df_clean['date_group'].iloc[0]
+                    nama_file_pdf = f"REKAP_METAR_{first_date.day:02d}_{BULAN_INDO[first_date.month]}_{first_date.year}.pdf"
                     
                     st.download_button(
                         label="📥 Download PDF Rekap METAR Resmi",
                         data=pdf_data,
-                        file_name=f"Rekap_METAR_{df_clean['date_group'].iloc[0]}.pdf",
+                        file_name=nama_file_pdf,
                         mime="application/pdf"
                     )
     except Exception as e:
