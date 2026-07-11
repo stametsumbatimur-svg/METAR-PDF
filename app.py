@@ -57,10 +57,12 @@ def parse_metar(sandi_str):
 # --- FUNGSI GENERATE PDF ---
 def generate_pdf_bytes(df_clean, logo_path):
     buffer = io.BytesIO()
+    
+    # KUNCI 1: Mengubah margin menjadi 25 agar area cetak vertikal dan horizontal jauh lebih luas
     doc = SimpleDocTemplate(
         buffer, 
         pagesize=letter,
-        rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36
+        rightMargin=25, leftMargin=25, topMargin=25, bottomMargin=25
     )
     story = []
     
@@ -84,10 +86,11 @@ def generate_pdf_bytes(df_clean, logo_path):
         alignment=1
     )
     
+    # KUNCI 2: Mengecilkan font tabel menjadi 8pt dan leading 10pt agar baris teks sangat ramping
     table_text_style = ParagraphStyle(
         'TableText', 
         parent=styles['Normal'], 
-        fontSize=8.5, 
+        fontSize=8, 
         leading=10, 
         alignment=1
     )
@@ -107,33 +110,33 @@ def generate_pdf_bytes(df_clean, logo_path):
             Paragraph(f"<b>{nama_stasiun}</b>", header_text_style),
         ]
         
-        # Menggunakan file lokal langsung (Sangat aman dari kebocoran memori/Segmentation fault)
+        # KUNCI 3: Lebar total Kop Surat disesuaikan dengan lebar baru halaman (562pt)
         if logo_path and os.path.exists(logo_path):
-            logo_img = Image(logo_path, width=50, height=50)
-            header_table = Table([[logo_img, text_block, ""]], colWidths=[60, 420, 60])
+            logo_img = Image(logo_path, width=48, height=48)
+            header_table = Table([[logo_img, text_block, ""]], colWidths=[55, 452, 55])
             header_table.setStyle(TableStyle([
                 ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
                 ('ALIGN', (0,0), (0,0), 'CENTER'),
                 ('ALIGN', (1,0), (1,0), 'CENTER'),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 8),
-                ('TOPPADDING', (0,0), (-1,-1), 2),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+                ('TOPPADDING', (0,0), (-1,-1), 0),
                 ('LINEBELOW', (0,0), (-1,-1), 1.5, colors.black),
             ]))
         else:
-            header_table = Table([[text_block]], colWidths=[540])
+            header_table = Table([[text_block]], colWidths=[562])
             header_table.setStyle(TableStyle([
                 ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
                 ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 8),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 6),
                 ('LINEBELOW', (0,0), (-1,-1), 1.5, colors.black),
             ]))
             
         story.append(header_table)
-        story.append(Spacer(1, 15))
+        story.append(Spacer(1, 10))
         
         judul_rekap = f"REKAP DATA METAR: {tanggal_format}".upper()
         story.append(Paragraph(f"<b>{judul_rekap}</b>", rekap_style))
-        story.append(Spacer(1, 10))
+        story.append(Spacer(1, 8))
         
         headers = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK']
         table_data = [[Paragraph(f"<b>{h}</b>", table_text_style) for h in headers]]
@@ -142,15 +145,19 @@ def generate_pdf_bytes(df_clean, logo_path):
             row_data = [Paragraph(str(row[h]), table_text_style) for h in headers]
             table_data.append(row_data)
             
-        col_widths = [45, 40, 55, 65, 40, 35, 60, 45, 45, 50]
+        # KUNCI 4: Mengatur ulang lebar kolom agar total pas 562pt. 
+        # Kolom WIND (75) dan CLOUD (105) diperlebar drastis untuk mencegah text-wrapping.
+        col_widths = [45, 40, 55, 75, 42, 40, 105, 45, 50, 65]
+        
         metar_table = Table(table_data, colWidths=col_widths)
         metar_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-            ('TOPPADDING', (0, 0), (-1, -1), 5),
+            # KUNCI 5: padding diperketat ke 2.5pt agar tabel sangat ringkas secara vertikal
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
+            ('TOPPADDING', (0, 0), (-1, -1), 2.5),
         ]))
         story.append(metar_table)
 
@@ -164,10 +171,8 @@ st.set_page_config(page_title="METAR PDF Generator", layout="centered")
 st.title("✈️ METAR to PDF Converter")
 st.write("Aplikasi pengubah otomatis extract data CSV METAR menjadi PDF formal per jam (00-23 UTC) dengan layout Kop Surat Resmi.")
 
-# Path file lokal Anda
 LOGO_FILE = "logo_bmkg.png"
 
-# Peringatan di halaman web jika Anda lupa memasukkan filenya di folder GitHub
 if not os.path.exists(LOGO_FILE):
     st.warning(f"⚠️ File gambar '{LOGO_FILE}' tidak terdeteksi di folder utama. Harap pastikan file logo sudah di-upload ke GitHub.")
 
