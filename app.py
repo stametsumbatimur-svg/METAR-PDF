@@ -16,7 +16,7 @@ BULAN_INDO = {
     9: "SEPTEMBER", 10: "OKTOBER", 11: "NOVEMBER", 12: "DESEMBER"
 }
 
-# --- FUNGSI PARSING SANDI METAR (MENDUKUNG CAVOK & NSC) ---
+# --- FUNGSI PARSING SANDI METAR ---
 def parse_metar(sandi_str):
     if pd.isna(sandi_str):
         return None
@@ -34,13 +34,10 @@ def parse_metar(sandi_str):
         metar, loc, time_str = tokens[0], tokens[1], tokens[2]
         remaining = tokens[3:]
         
-        # Cek apakah ada sandi CAVOK di dalam seluruh token
         if 'CAVOK' in remaining:
             vis = 'CAVOK'
-            wx = ''      # Dikosongkan untuk persiapan MERGE tabel
-            cloud = ''   # Dikosongkan untuk persiapan MERGE tabel
-            
-            # Cari token lain yang tersisa (WIND, T/DP, QNH, RMK)
+            wx = ''      
+            cloud = ''   
             for t in remaining:
                 if re.match(r'^\d{5}(G\d{2})?KT$', t) or re.match(r'^VRB\d{2}KT$', t) or t == '00000KT':
                     wind = t
@@ -51,7 +48,6 @@ def parse_metar(sandi_str):
                 elif t in ['NOSIG', 'TEMPO', 'BECMG']:
                     rmk = t
         else:
-            # Jika BUKAN CAVOK, jalankan parsing normal seperti biasa
             cloud_list = []
             for t in remaining:
                 if re.match(r'^\d{5}(G\d{2})?KT$', t) or re.match(r'^VRB\d{2}KT$', t) or t == '00000KT':
@@ -73,7 +69,7 @@ def parse_metar(sandi_str):
             
     return [metar, loc, time_str, wind, vis, wx, cloud, t_dp, qnh, rmk]
 
-# --- FUNGSI GENERATE PDF DENGAN DINAMIS MERGE (SPAN) ---
+# --- FUNGSI GENERATE PDF ---
 def generate_pdf_bytes(df_clean, logo_path):
     buffer = io.BytesIO()
     
@@ -149,7 +145,6 @@ def generate_pdf_bytes(df_clean, logo_path):
         headers = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK']
         table_data = [headers]
         
-        # Base style awal untuk tabel dasar
         base_table_style = [
             ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
@@ -163,18 +158,15 @@ def generate_pdf_bytes(df_clean, logo_path):
             ('FONTSIZE', (0, 1), (-1, -1), 8),
         ]
         
-        # Masukkan baris data dan catat jika ada CAVOK untuk di-MERGE otomatis
         for idx, row in group.iterrows():
-            current_row_idx = len(table_data) # Mendapatkan index baris riil di tabel PDF
+            current_row_idx = len(table_data)
             
             if row['VIS'] == 'CAVOK':
-                # Jika CAVOK, kolom 4 diisi tulisan 'CAVOK', kolom 5 & 6 dikosongkan agar siap ditimpa Merge
                 row_data = [
                     str(row['METAR']), str(row['LOC']), str(row['TIME']), str(row['WIND']),
                     'CAVOK', '', '', 
                     str(row['T/DP']), str(row['QNH']), str(row['RMK'])
                 ]
-                # KUNCI UTAMA: Tambahkan perintah SPAN dinamis (Merge Kolom Indeks 4 sampai 6)
                 base_table_style.append(('SPAN', (4, current_row_idx), (6, current_row_idx)))
             else:
                 row_data = [str(row[h]) for h in headers]
@@ -195,7 +187,7 @@ def generate_pdf_bytes(df_clean, logo_path):
 st.set_page_config(page_title="METAR PDF Generator", layout="centered")
 
 st.title("✈️ METAR to PDF Converter")
-st.write("Aplikasi pengubah otomatis extract data CSV METAR menjadi PDF formal per jam (00-23 UTC) dengan layout Kop Surat Resmi.")
+st.write("Aplikasi pengubah otomatis extract data CSV METAR menjadi PDF formal per jam (00-23 UTC) dengan penyaringan data duplikat terbaru.")
 
 LOGO_FILE = "logo_bmkg.png"
 
@@ -211,30 +203,41 @@ if uploaded_file is not None:
         if 'sandi' not in df.columns or 'data_timestamp' not in df.columns:
             st.error("Format CSV tidak sesuai! Pastikan terdapat kolom 'sandi' dan 'data_timestamp'.")
         else:
-            with st.spinner("Sedang memproses seluruh data METAR... Mohon tunggu sebentar."):
+            with st.spinner("Sedang memproses dan menyaring data terbaru..."):
                 parsed_rows = []
                 for idx, row in df.iterrows():
                     res = parse_metar(row['sandi'])
                     if res:
                         station = row['station_name'] if 'station_name' in df.columns else "STASIUN METEOROLOGI"
-                        parsed_rows.append(res + [row['data_timestamp'], station])
+                        msg_id = row['id'] if 'id' in df.columns else idx
+                        # KUNCI 1: Ikut sertakan 'msg_id' asli untuk mendeteksi data kiriman paling akhir
+                        parsed_rows.append(res + [row['data_timestamp'], station, msg_id])
                         
-                columns = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK', 'raw_timestamp', 'station_name']
+                columns = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK', 'raw_timestamp', 'station_name', 'msg_id']
                 df_clean = pd.DataFrame(parsed_rows, columns=columns)
                 
                 df_clean['raw_timestamp'] = df_clean['raw_timestamp'].str.replace(" +0000 UTC", "", regex=False)
                 df_clean['datetime'] = pd.to_datetime(df_clean['raw_timestamp'])
                 
+                # Filter menit berkembar :00 saja (per jam)
                 df_clean = df_clean[df_clean['datetime'].dt.minute == 0]
+                
+                # KUNCI 2: Urutkan berdasarkan ID pesan terkecil ke terbesar
+                df_clean = df_clean.sort_values(by='msg_id')
+                
+                # KUNCI 3: Buang duplikat pada jam yang sama, sisakan hanya yang terakhir masuk (keep='last')
+                df_clean = df_clean.drop_duplicates(subset=['datetime'], keep='last')
+                
+                # KUNCI 4: Kembalikan urutan kronologis waktu untuk kebutuhan pembagian halaman PDF
                 df_clean['date_group'] = df_clean['datetime'].dt.date
                 df_clean = df_clean.sort_values(by='datetime').reset_index(drop=True)
                 
                 if df_clean.empty:
                     st.warning("Tidak ditemukan data dengan menit :00 (per jam) di dalam file ini.")
                 else:
-                    st.success(f"Berhasil memproses {len(df_clean)} baris data per jam!")
+                    st.success(f"Berhasil menyaring data! Siap diunduh.")
                     
-                    st.subheader("Preview Data (Hanya Jam Genap)")
+                    st.subheader("Preview Data Terkini (Bebas Duplikat)")
                     st.dataframe(df_clean[['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'CLOUD', 'T/DP', 'QNH']].head(10), width='stretch')
                     
                     pdf_data = generate_pdf_bytes(df_clean, LOGO_FILE)
