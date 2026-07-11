@@ -19,13 +19,10 @@ BULAN_INDO = {
 
 # --- FUNGSI AMBIL LOGO (MENGEMBALIKAN RAW BYTES) ---
 def get_bmkg_logo_bytes():
-    """Mengambil logo dalam bentuk RAW BYTES untuk mencegah stream exhaustion penyebab segfault"""
-    # 1. Cek file lokal di GitHub terlebih dahulu
     if os.path.exists("logo_bmkg.png"):
         with open("logo_bmkg.png", "rb") as f:
             return f.read()
         
-    # 2. Jika tidak ada, download dari Wikipedia dengan header bypass
     url = "https://upload.wikimedia.org/wikipedia/commons/1/12/Logo_BMKG_%282010%29.png"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
@@ -57,7 +54,6 @@ def parse_metar(sandi_str):
         remaining = tokens[3:]
         cloud_list = []
         for t in remaining:
-            # PERBAIKAN: Menggunakan regex raw string secara konsisten untuk menghilangkan SyntaxWarning
             if re.match(r'^\d{5}(G\d{2})?KT$', t) or re.match(r'^VRB\d{2}KT$', t) or t == '00000KT':
                 wind = t
             elif re.match(r'^\d{4}$', t) or t == 'CAVOK':
@@ -94,7 +90,7 @@ def generate_pdf_bytes(df_clean, logo_bytes):
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
         fontSize=11,
-        leading=14,
+        leading=15,
         alignment=1
     )
     
@@ -131,27 +127,31 @@ def generate_pdf_bytes(df_clean, logo_bytes):
         ]
         
         if logo_bytes:
-            # PERBAIKAN UTAMA: Membuat instance BytesIO baru dari raw bytes di SETIAP Halaman
-            # Ini mencegah kegagalan pembacaan pointer internal objek gambar pada multi-halaman
             fresh_logo_stream = io.BytesIO(logo_bytes)
-            logo_img = Image(fresh_logo_stream, width=45, height=45)
-            header_table = Table([[logo_img, text_block, ""]], colWidths=[50, 440, 50])
+            # PENYESUAIAN: Logo dinaikkan ke 50x50 agar proporsional
+            logo_img = Image(fresh_logo_stream, width=50, height=50)
+            
+            # PENYESUAIAN: Lebar kolom diseimbangkan [60, 420, 60] agar teks center absolut pada halaman
+            header_table = Table([[logo_img, text_block, ""]], colWidths=[60, 420, 60])
             header_table.setStyle(TableStyle([
                 ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-                ('ALIGN', (0,0), (0,0), 'LEFT'),
-                ('ALIGN', (1,0), (1,0), 'CENTER'),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 0),
-                ('TOPPADDING', (0,0), (-1,-1), 0),
+                ('ALIGN', (0,0), (0,0), 'CENTER'),   # Logo rata tengah di dalam kolomnya
+                ('ALIGN', (1,0), (1,0), 'CENTER'),   # Teks rata tengah
+                ('BOTTOMPADDING', (0,0), (-1,-1), 8), # Jarak bawah sebelum garis
+                ('TOPPADDING', (0,0), (-1,-1), 2),
+                ('LINEBELOW', (0,0), (-1,-1), 1.5, colors.black), # GARIS KOP SURAT TEBAL RESMI
             ]))
         else:
             header_table = Table([[text_block]], colWidths=[540])
             header_table.setStyle(TableStyle([
                 ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
                 ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 8),
+                ('LINEBELOW', (0,0), (-1,-1), 1.5, colors.black),
             ]))
             
         story.append(header_table)
-        story.append(Spacer(1, 15))
+        story.append(Spacer(1, 15)) # Jarak aman dari garis kop ke judul rekap
         
         judul_rekap = f"REKAP DATA METAR: {tanggal_format}".upper()
         story.append(Paragraph(f"<b>{judul_rekap}</b>", rekap_style))
@@ -186,7 +186,6 @@ st.set_page_config(page_title="METAR PDF Generator", layout="centered")
 st.title("✈️ METAR to PDF Converter")
 st.write("Aplikasi pengubah otomatis extract data CSV METAR menjadi PDF formal per jam (00-23 UTC) dengan layout Kop Surat Resmi.")
 
-# Mengambil raw bytes dari logo
 logo_bytes = get_bmkg_logo_bytes()
 
 uploaded_file = st.file_uploader("Upload file CSV hasil extract sistem Anda", type=["csv"])
