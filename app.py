@@ -47,7 +47,6 @@ def parse_metar(sandi_str):
     return [metar, loc, time_str, wind, vis, wx, cloud, t_dp, qnh, rmk]
 
 def generate_pdf_bytes(df_clean):
-    """Fungsi untuk membuat PDF langsung di dalam memori (BytesIO) agar bisa di-download via web"""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer, 
@@ -60,7 +59,7 @@ def generate_pdf_bytes(df_clean):
     title_style = ParagraphStyle('HeaderTitle', parent=styles['Heading2'], fontSize=11, leading=13)
     table_text_style = ParagraphStyle('TableText', parent=styles['Normal'], fontSize=8.5, leading=10, alignment=1)
     
-    nama_stasiun = df_clean['station_name'].iloc[0].upper()
+    nama_stasiun = df_clean['station_name'].iloc[0].upper() if 'station_name' in df_clean.columns else "STASIUN METEOROLOGI"
     grouped = df_clean.groupby('date_group')
     
     for count, (date, group) in enumerate(grouped):
@@ -109,25 +108,28 @@ uploaded_file = st.file_uploader("Upload file CSV hasil extract sistem Anda", ty
 
 if uploaded_file is not None:
     try:
-        # Load Data
         df = pd.read_csv(uploaded_file)
         
         if 'sandi' not in df.columns or 'data_timestamp' not in df.columns:
             st.error("Format CSV tidak sesuai! Pastikan terdapat kolom 'sandi' dan 'data_timestamp'.")
         else:
             with st.spinner("Sedang memproses dan menyaring data..."):
-                # Proses Parsing
                 parsed_rows = []
                 for idx, row in df.iterrows():
                     res = parse_metar(row['sandi'])
                     if res:
-                        parsed_rows.append(res + [row['data_timestamp'], row['station_name']])
+                        station = row['station_name'] if 'station_name' in df.columns else "STASIUN METEOROLOGI"
+                        parsed_rows.append(res + [row['data_timestamp'], station])
                         
                 columns = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK', 'raw_timestamp', 'station_name']
                 df_clean = pd.DataFrame(parsed_rows, columns=columns)
                 
-                # Filter Menit Berkembar (:00 saja)
+                # --- PERBAIKAN DI BAGIAN INI ---
+                # Bersihkan "+0000 UTC" agar bisa dibaca oleh Pandas
+                df_clean['raw_timestamp'] = df_clean['raw_timestamp'].str.replace(" +0000 UTC", "", regex=False)
                 df_clean['datetime'] = pd.to_datetime(df_clean['raw_timestamp'])
+                
+                # Filter menit berkembar :00 saja (per jam)
                 df_clean = df_clean[df_clean['datetime'].dt.minute == 0]
                 df_clean['date_group'] = df_clean['datetime'].dt.date
                 df_clean = df_clean.sort_values(by='datetime').reset_index(drop=True)
@@ -137,14 +139,11 @@ if uploaded_file is not None:
                 else:
                     st.success(f"Berhasil memproses data! Ditemukan {len(df_clean)} baris data per jam.")
                     
-                    # Tampilkan preview data bersih di web
                     st.subheader("Preview Data (Hanya Jam Genap)")
                     st.dataframe(df_clean[['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'CLOUD', 'T/DP', 'QNH']].head(10), use_container_width=True)
                     
-                    # Generate PDF ke memory
                     pdf_data = generate_pdf_bytes(df_clean)
                     
-                    # Tombol Download
                     st.download_button(
                         label="📥 Download PDF Rekap METAR",
                         data=pdf_data,
