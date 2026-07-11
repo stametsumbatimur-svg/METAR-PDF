@@ -58,7 +58,6 @@ def parse_metar(sandi_str):
 def generate_pdf_bytes(df_clean, logo_path):
     buffer = io.BytesIO()
     
-    # KUNCI 1: Mengubah margin menjadi 25 agar area cetak vertikal dan horizontal jauh lebih luas
     doc = SimpleDocTemplate(
         buffer, 
         pagesize=letter,
@@ -86,15 +85,6 @@ def generate_pdf_bytes(df_clean, logo_path):
         alignment=1
     )
     
-    # KUNCI 2: Mengecilkan font tabel menjadi 8pt dan leading 10pt agar baris teks sangat ramping
-    table_text_style = ParagraphStyle(
-        'TableText', 
-        parent=styles['Normal'], 
-        fontSize=8, 
-        leading=10, 
-        alignment=1
-    )
-    
     nama_stasiun = df_clean['station_name'].iloc[0].upper() if 'station_name' in df_clean.columns else "STASIUN METEOROLOGI"
     grouped = df_clean.groupby('date_group')
     
@@ -110,7 +100,6 @@ def generate_pdf_bytes(df_clean, logo_path):
             Paragraph(f"<b>{nama_stasiun}</b>", header_text_style),
         ]
         
-        # KUNCI 3: Lebar total Kop Surat disesuaikan dengan lebar baru halaman (562pt)
         if logo_path and os.path.exists(logo_path):
             logo_img = Image(logo_path, width=48, height=48)
             header_table = Table([[logo_img, text_block, ""]], colWidths=[55, 452, 55])
@@ -139,14 +128,14 @@ def generate_pdf_bytes(df_clean, logo_path):
         story.append(Spacer(1, 8))
         
         headers = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK']
-        table_data = [[Paragraph(f"<b>{h}</b>", table_text_style) for h in headers]]
+        
+        # KUNCI UTAMA: Kita masukkan RAW STRING (teks biasa), bukan objek Paragraph()!
+        table_data = [headers]
         
         for _, row in group.iterrows():
-            row_data = [Paragraph(str(row[h]), table_text_style) for h in headers]
+            row_data = [str(row[h]) for h in headers]
             table_data.append(row_data)
             
-        # KUNCI 4: Mengatur ulang lebar kolom agar total pas 562pt. 
-        # Kolom WIND (75) dan CLOUD (105) diperlebar drastis untuk mencegah text-wrapping.
         col_widths = [45, 40, 55, 75, 42, 40, 105, 45, 50, 65]
         
         metar_table = Table(table_data, colWidths=col_widths)
@@ -155,9 +144,13 @@ def generate_pdf_bytes(df_clean, logo_path):
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
-            # KUNCI 5: padding diperketat ke 2.5pt agar tabel sangat ringkas secara vertikal
             ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
             ('TOPPADDING', (0, 0), (-1, -1), 2.5),
+            # KUNCI KEDUA: Mengatur jenis dan ukuran font langsung lewat TableStyle secara global
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 8),
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 8),
         ]))
         story.append(metar_table)
 
@@ -185,7 +178,7 @@ if uploaded_file is not None:
         if 'sandi' not in df.columns or 'data_timestamp' not in df.columns:
             st.error("Format CSV tidak sesuai! Pastikan terdapat kolom 'sandi' dan 'data_timestamp'.")
         else:
-            with st.spinner("Sedang memproses seluruh data METAR... Mohon tunggu sebentar."):
+            with st.spinner("Sedang memproses seluruh data METAR skala besar... Mohon tunggu sebentar."):
                 parsed_rows = []
                 for idx, row in df.iterrows():
                     res = parse_metar(row['sandi'])
