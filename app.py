@@ -17,23 +17,24 @@ BULAN_INDO = {
     9: "SEPTEMBER", 10: "OKTOBER", 11: "NOVEMBER", 12: "DESEMBER"
 }
 
-# --- FUNGSI AMBIL LOGO (LOKAL / URL WITH USER-AGENT) ---
-def get_bmkg_logo():
-    """Mengambil logo secara aman dari lokal GitHub atau bypass unduhan Wikipedia"""
-    # 1. Cek jika user menaruh file 'logo_bmkg.png' di direktori GitHub nya
+# --- FUNGSI AMBIL LOGO (MENGEMBALIKAN RAW BYTES) ---
+def get_bmkg_logo_bytes():
+    """Mengambil logo dalam bentuk RAW BYTES untuk mencegah stream exhaustion penyebab segfault"""
+    # 1. Cek file lokal di GitHub terlebih dahulu
     if os.path.exists("logo_bmkg.png"):
-        return "logo_bmkg.png"
+        with open("logo_bmkg.png", "rb") as f:
+            return f.read()
         
-    # 2. Jika tidak ada file lokal, download dari Wikipedia menggunakan Browser User-Agent (Bypass 403)
-    url = "https://upload.wikimedia.org/wikipedia/commons/thumb/b/ba/Logo_BMKG_%282010%29.svg/120px-Logo_BMKG_%282010%29.svg.png"
+    # 2. Jika tidak ada, download dari Wikipedia dengan header bypass
+    url = "https://upload.wikimedia.org/wikipedia/commons/1/12/Logo_BMKG_%282010%29.png"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     }
     try:
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
-            return io.BytesIO(response.content)
-    except Exception as e:
+            return response.content
+    except Exception:
         pass
     return None
 
@@ -56,7 +57,8 @@ def parse_metar(sandi_str):
         remaining = tokens[3:]
         cloud_list = []
         for t in remaining:
-            if re.match(r'^\d{5}(G\d{2})?KT$', t) or t == 'VRB\d{2}KT' or t == '00000KT':
+            # PERBAIKAN: Menggunakan regex raw string secara konsisten untuk menghilangkan SyntaxWarning
+            if re.match(r'^\d{5}(G\d{2})?KT$', t) or re.match(r'^VRB\d{2}KT$', t) or t == '00000KT':
                 wind = t
             elif re.match(r'^\d{4}$', t) or t == 'CAVOK':
                 vis = t
@@ -76,7 +78,7 @@ def parse_metar(sandi_str):
     return [metar, loc, time_str, wind, vis, wx, cloud, t_dp, qnh, rmk]
 
 # --- FUNGSI GENERATE PDF ---
-def generate_pdf_bytes(df_clean, logo_source):
+def generate_pdf_bytes(df_clean, logo_bytes):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer, 
@@ -128,8 +130,11 @@ def generate_pdf_bytes(df_clean, logo_source):
             Paragraph(f"<b>{nama_stasiun}</b>", header_text_style),
         ]
         
-        if logo_source:
-            logo_img = Image(logo_source, width=45, height=45)
+        if logo_bytes:
+            # PERBAIKAN UTAMA: Membuat instance BytesIO baru dari raw bytes di SETIAP Halaman
+            # Ini mencegah kegagalan pembacaan pointer internal objek gambar pada multi-halaman
+            fresh_logo_stream = io.BytesIO(logo_bytes)
+            logo_img = Image(fresh_logo_stream, width=45, height=45)
             header_table = Table([[logo_img, text_block, ""]], colWidths=[50, 440, 50])
             header_table.setStyle(TableStyle([
                 ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
@@ -181,8 +186,8 @@ st.set_page_config(page_title="METAR PDF Generator", layout="centered")
 st.title("✈️ METAR to PDF Converter")
 st.write("Aplikasi pengubah otomatis extract data CSV METAR menjadi PDF formal per jam (00-23 UTC) dengan layout Kop Surat Resmi.")
 
-# Mengambil objek logo (Bisa berupa string path lokal atau BytesIO web)
-logo_source = get_bmkg_logo()
+# Mengambil raw bytes dari logo
+logo_bytes = get_bmkg_logo_bytes()
 
 uploaded_file = st.file_uploader("Upload file CSV hasil extract sistem Anda", type=["csv"])
 
@@ -219,7 +224,7 @@ if uploaded_file is not None:
                     st.subheader("Preview Data (Hanya Jam Genap)")
                     st.dataframe(df_clean[['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'CLOUD', 'T/DP', 'QNH']].head(10), use_container_width=True)
                     
-                    pdf_data = generate_pdf_bytes(df_clean, logo_source)
+                    pdf_data = generate_pdf_bytes(df_clean, logo_bytes)
                     
                     first_date = df_clean['date_group'].iloc[0]
                     nama_file_pdf = f"REKAP_METAR_{first_date.day:02d}_{BULAN_INDO[first_date.month]}_{first_date.year}.pdf"
