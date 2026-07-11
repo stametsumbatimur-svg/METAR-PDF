@@ -16,7 +16,7 @@ BULAN_INDO = {
     9: "SEPTEMBER", 10: "OKTOBER", 11: "NOVEMBER", 12: "DESEMBER"
 }
 
-# --- FUNGSI PARSING SANDI METAR ---
+# --- FUNGSI PARSING SANDI METAR (MENDUKUNG CAVOK & NSC) ---
 def parse_metar(sandi_str):
     if pd.isna(sandi_str):
         return None
@@ -33,28 +33,47 @@ def parse_metar(sandi_str):
     if len(tokens) >= 3:
         metar, loc, time_str = tokens[0], tokens[1], tokens[2]
         remaining = tokens[3:]
-        cloud_list = []
-        for t in remaining:
-            if re.match(r'^\d{5}(G\d{2})?KT$', t) or re.match(r'^VRB\d{2}KT$', t) or t == '00000KT':
-                wind = t
-            elif re.match(r'^\d{4}$', t) or t == 'CAVOK':
-                vis = t
-            elif t in ['RA', 'DZ', 'SHRA', 'TSRA', 'TS', 'BR', 'HZ', 'FG', '-RA', '+RA']:
-                wx = t
-            elif re.match(r'^(FEW|SCT|BKN|OVC)\d{3}$', t) or re.match(r'^NSC$', t) or re.match(r'^SKC$', t):
-                cloud_list.append(t)
-            elif re.match(r'^\d{2}/\d{2}$', t) or re.match(r'^M\d{2}/\d{2}$', t):
-                t_dp = t
-            elif re.match(r'^Q\d{4}$', t):
-                qnh = t
-            elif t in ['NOSIG', 'TEMPO', 'BECMG']:
-                rmk = t
-        if cloud_list:
-            cloud = " ".join(cloud_list)
+        
+        # Cek apakah ada sandi CAVOK di dalam seluruh token
+        if 'CAVOK' in remaining:
+            vis = 'CAVOK'
+            wx = ''      # Dikosongkan untuk persiapan MERGE tabel
+            cloud = ''   # Dikosongkan untuk persiapan MERGE tabel
+            
+            # Cari token lain yang tersisa (WIND, T/DP, QNH, RMK)
+            for t in remaining:
+                if re.match(r'^\d{5}(G\d{2})?KT$', t) or re.match(r'^VRB\d{2}KT$', t) or t == '00000KT':
+                    wind = t
+                elif re.match(r'^\d{2}/\d{2}$', t) or re.match(r'^M\d{2}/\d{2}$', t):
+                    t_dp = t
+                elif re.match(r'^Q\d{4}$', t):
+                    qnh = t
+                elif t in ['NOSIG', 'TEMPO', 'BECMG']:
+                    rmk = t
+        else:
+            # Jika BUKAN CAVOK, jalankan parsing normal seperti biasa
+            cloud_list = []
+            for t in remaining:
+                if re.match(r'^\d{5}(G\d{2})?KT$', t) or re.match(r'^VRB\d{2}KT$', t) or t == '00000KT':
+                    wind = t
+                elif re.match(r'^\d{4}$', t):
+                    vis = t
+                elif t in ['RA', 'DZ', 'SHRA', 'TSRA', 'TS', 'BR', 'HZ', 'FG', '-RA', '+RA']:
+                    wx = t
+                elif re.match(r'^(FEW|SCT|BKN|OVC)\d{3}$', t) or t in ['NSC', 'SKC', 'CLR']:
+                    cloud_list.append(t)
+                elif re.match(r'^\d{2}/\d{2}$', t) or re.match(r'^M\d{2}/\d{2}$', t):
+                    t_dp = t
+                elif re.match(r'^Q\d{4}$', t):
+                    qnh = t
+                elif t in ['NOSIG', 'TEMPO', 'BECMG']:
+                    rmk = t
+            if cloud_list:
+                cloud = " ".join(cloud_list)
             
     return [metar, loc, time_str, wind, vis, wx, cloud, t_dp, qnh, rmk]
 
-# --- FUNGSI GENERATE PDF ---
+# --- FUNGSI GENERATE PDF DENGAN DINAMIS MERGE (SPAN) ---
 def generate_pdf_bytes(df_clean, logo_path):
     buffer = io.BytesIO()
     
@@ -128,30 +147,44 @@ def generate_pdf_bytes(df_clean, logo_path):
         story.append(Spacer(1, 8))
         
         headers = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK']
-        
-        # KUNCI UTAMA: Kita masukkan RAW STRING (teks biasa), bukan objek Paragraph()!
         table_data = [headers]
         
-        for _, row in group.iterrows():
-            row_data = [str(row[h]) for h in headers]
-            table_data.append(row_data)
-            
-        col_widths = [45, 40, 55, 75, 42, 40, 105, 45, 50, 65]
-        
-        metar_table = Table(table_data, colWidths=col_widths)
-        metar_table.setStyle(TableStyle([
+        # Base style awal untuk tabel dasar
+        base_table_style = [
             ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
             ('TOPPADDING', (0, 0), (-1, -1), 2.5),
-            # KUNCI KEDUA: Mengatur jenis dan ukuran font langsung lewat TableStyle secara global
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, 0), 8),
             ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
             ('FONTSIZE', (0, 1), (-1, -1), 8),
-        ]))
+        ]
+        
+        # Masukkan baris data dan catat jika ada CAVOK untuk di-MERGE otomatis
+        for idx, row in group.iterrows():
+            current_row_idx = len(table_data) # Mendapatkan index baris riil di tabel PDF
+            
+            if row['VIS'] == 'CAVOK':
+                # Jika CAVOK, kolom 4 diisi tulisan 'CAVOK', kolom 5 & 6 dikosongkan agar siap ditimpa Merge
+                row_data = [
+                    str(row['METAR']), str(row['LOC']), str(row['TIME']), str(row['WIND']),
+                    'CAVOK', '', '', 
+                    str(row['T/DP']), str(row['QNH']), str(row['RMK'])
+                ]
+                # KUNCI UTAMA: Tambahkan perintah SPAN dinamis (Merge Kolom Indeks 4 sampai 6)
+                base_table_style.append(('SPAN', (4, current_row_idx), (6, current_row_idx)))
+            else:
+                row_data = [str(row[h]) for h in headers]
+                
+            table_data.append(row_data)
+            
+        col_widths = [45, 40, 55, 75, 42, 40, 105, 45, 50, 65]
+        
+        metar_table = Table(table_data, colWidths=col_widths)
+        metar_table.setStyle(TableStyle(base_table_style))
         story.append(metar_table)
 
     doc.build(story)
@@ -178,7 +211,7 @@ if uploaded_file is not None:
         if 'sandi' not in df.columns or 'data_timestamp' not in df.columns:
             st.error("Format CSV tidak sesuai! Pastikan terdapat kolom 'sandi' dan 'data_timestamp'.")
         else:
-            with st.spinner("Sedang memproses seluruh data METAR skala besar... Mohon tunggu sebentar."):
+            with st.spinner("Sedang memproses seluruh data METAR... Mohon tunggu sebentar."):
                 parsed_rows = []
                 for idx, row in df.iterrows():
                     res = parse_metar(row['sandi'])
