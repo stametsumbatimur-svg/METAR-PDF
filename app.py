@@ -132,12 +132,12 @@ def generate_pdf_bytes(df_clean, logo_path):
             
         nama_bulan = BULAN_INDO[date.month]
         tanggal_format = f"{date.day:02d} {nama_bulan} {date.year}"
-        
+        judul_rekap = f"REKAP DATA METAR: {tanggal_format}".upper()
         text_block = [
             Paragraph("<b>BALAI BESAR METEOROLOGI KLIMATOLOGI DAN GEOFISIKA WILAYAH III</b>", header_text_style),
             Paragraph(f"<b>{nama_stasiun}</b>", header_text_style),
             Paragraph("<b>JL. ADI SUCIPTO NO. 3</b>", header_text_style),
-            judul_rekap = f"REKAP DATA METAR: {tanggal_format}".upper()
+            Paragraph(f"<b>{judul_rekap}</b>", header_text_style)
         ]
         
         if logo_path and os.path.exists(logo_path):
