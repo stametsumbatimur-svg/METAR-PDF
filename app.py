@@ -137,6 +137,7 @@ def generate_pdf_bytes(df_clean, logo_path):
             Paragraph("<b>BALAI BESAR METEOROLOGI KLIMATOLOGI DAN GEOFISIKA WILAYAH III</b>", header_text_style),
             Paragraph(f"<b>{nama_stasiun}</b>", header_text_style),
             Paragraph("<b>JL. ADI SUCIPTO NO. 3</b>", header_text_style),
+            judul_rekap = f"REKAP DATA METAR: {tanggal_format}".upper()
         ]
         
         if logo_path and os.path.exists(logo_path):
@@ -162,7 +163,7 @@ def generate_pdf_bytes(df_clean, logo_path):
         story.append(header_table)
         story.append(Spacer(1, 10))
         
-        judul_rekap = f"REKAP DATA METAR: {tanggal_format}".upper()
+        
         story.append(Paragraph(f"<b>{judul_rekap}</b>", rekap_style))
         story.append(Spacer(1, 8))
         
