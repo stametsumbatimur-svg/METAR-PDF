@@ -170,7 +170,7 @@ def generate_pdf_bytes(df_clean, logo_path):
         
         base_table_style = [
             ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('ALIGN', (0, 0), (-1,-1), 'CENTER'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
@@ -305,7 +305,7 @@ if uploaded_file is not None:
                     st.success(f"Berhasil! Data telah disaring ketat berdasarkan aturan koreksi meteorologi.")
                     
                     st.subheader("Preview Data Tervalidasi")
-                    # FIX: Mengubah kembali parameter use_container_width menjadi width='stretch' sesuai log error versi baru
+                    # Rapi lebar penuh sesuai aturan Streamlif terbaru
                     st.dataframe(df_clean[['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'CLOUD', 'T/DP', 'QNH']].head(10), width='stretch')
                     
                     pdf_data = generate_pdf_bytes(df_clean, LOGO_FILE)
@@ -320,23 +320,23 @@ if uploaded_file is not None:
                     col_pdf, col_xlsx = st.columns(2)
                     
                     with col_pdf:
-                        # FIX: Mengubah use_container_width pada tombol ke width='stretch'
+                        # FIX: Menggunakan use_container_width=True (Tombol tidak support width='stretch')
                         st.download_button(
                             label="📥 Download PDF Rekap Resmi",
                             data=pdf_data,
                             file_name=f"{nama_file_base}.pdf",
                             mime="application/pdf",
-                            width='stretch'
+                            use_container_width=True
                         )
                         
                     with col_xlsx:
-                        # FIX: Mengubah use_container_width pada tombol ke width='stretch'
+                        # FIX: Menggunakan use_container_width=True (Tombol tidak support width='stretch')
                         st.download_button(
                             label="📊 Download Excel Spreadsheet",
                             data=excel_data,
                             file_name=f"{nama_file_base}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            width='stretch'
+                            use_container_width=True
                         )
                         
     except Exception as e:
