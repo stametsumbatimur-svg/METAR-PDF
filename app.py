@@ -170,7 +170,7 @@ def generate_pdf_bytes(df_clean, logo_path):
         
         base_table_style = [
             ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
-            ('ALIGN', (0, 0), (-1,-1), 'CENTER'),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
@@ -265,7 +265,7 @@ st.write("Aplikasi pengubah otomatis extract data CSV METAR menjadi PDF formal &
 LOGO_FILE = "logo_bmkg.png"
 
 if not os.path.exists(LOGO_FILE):
-    st.warning(f"⚠️ File gambar '{LOGO_FILE}' tidak terdeteksi di folder utama. Harap pastikan file logo sudah di-upload ke folder project.")
+    st.warning(f"⚠️ File gambar '{LOGO_FILE}' tidak terdeteksi di folder utama. Harap pastikan file logo sudah di-upload.")
 
 uploaded_file = st.file_uploader("Upload file CSV hasil extract sistem Anda", type=["csv"])
 
@@ -305,8 +305,8 @@ if uploaded_file is not None:
                     st.success(f"Berhasil! Data telah disaring ketat berdasarkan aturan koreksi meteorologi.")
                     
                     st.subheader("Preview Data Tervalidasi")
-                    # Rapi lebar penuh sesuai aturan Streamlif terbaru
-                    st.dataframe(df_clean[['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'CLOUD', 'T/DP', 'QNH']].head(10), width='stretch')
+                    # AMAN: Menghapus parameter width agar mengikuti auto-layout bawaan Streamlit
+                    st.dataframe(df_clean[['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'CLOUD', 'T/DP', 'QNH']].head(10))
                     
                     pdf_data = generate_pdf_bytes(df_clean, LOGO_FILE)
                     excel_data = generate_excel_bytes(df_clean)
@@ -320,23 +320,21 @@ if uploaded_file is not None:
                     col_pdf, col_xlsx = st.columns(2)
                     
                     with col_pdf:
-                        # FIX: Menggunakan use_container_width=True (Tombol tidak support width='stretch')
+                        # AMAN: Menghapus parameter ukuran yang memicu Segfault biner
                         st.download_button(
                             label="📥 Download PDF Rekap Resmi",
                             data=pdf_data,
                             file_name=f"{nama_file_base}.pdf",
-                            mime="application/pdf",
-                            use_container_width=True
+                            mime="application/pdf"
                         )
                         
                     with col_xlsx:
-                        # FIX: Menggunakan use_container_width=True (Tombol tidak support width='stretch')
+                        # AMAN: Menghapus parameter ukuran yang memicu Segfault biner
                         st.download_button(
                             label="📊 Download Excel Spreadsheet",
                             data=excel_data,
                             file_name=f"{nama_file_base}.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            use_container_width=True
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         )
                         
     except Exception as e:
