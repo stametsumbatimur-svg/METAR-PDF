@@ -260,14 +260,13 @@ def generate_excel_bytes(df_clean):
 st.set_page_config(page_title="METAR Data Generator", layout="centered")
 
 st.title("✈️ METAR to PDF & Excel Converter")
-st.write("Aplikasi pengubah otomatis extract data CSV METAR menjadi PDF formal & spreadsheet Excel per jam (00-23 UTC) dengan penyaringan hierarki COR/CCA/CCB resmi.")
 
 LOGO_FILE = "logo_bmkg.png"
 
 if not os.path.exists(LOGO_FILE):
     st.warning(f"⚠️ File gambar '{LOGO_FILE}' tidak terdeteksi di folder utama. Harap pastikan file logo sudah di-upload.")
 
-uploaded_file = st.file_uploader("Upload file CSV hasil extract sistem Anda", type=["csv"])
+uploaded_file = st.file_uploader("Upload file CSV", type=["csv"])
 
 if uploaded_file is not None:
     try:
@@ -302,7 +301,7 @@ if uploaded_file is not None:
                 if df_clean.empty:
                     st.warning("Tidak ditemukan data dengan menit :00 (per jam) di dalam file ini.")
                 else:
-                    st.success(f"Berhasil! Data telah disaring ketat berdasarkan aturan koreksi meteorologi.")
+                    st.success(f"Berhasil!")
                     
                     st.subheader("Preview Data Tervalidasi")
                     # AMAN: Menghapus parameter width agar mengikuti auto-layout bawaan Streamlit
@@ -322,7 +321,7 @@ if uploaded_file is not None:
                     with col_pdf:
                         # AMAN: Menghapus parameter ukuran yang memicu Segfault biner
                         st.download_button(
-                            label="📥 Download PDF Rekap Resmi",
+                            label="📥 Download PDF",
                             data=pdf_data,
                             file_name=f"{nama_file_base}.pdf",
                             mime="application/pdf"
@@ -338,4 +337,4 @@ if uploaded_file is not None:
                         )
                         
     except Exception as e:
-        st.error(f"Terjadi kesalahan saat memproses file: {e}")
+        st.error(f"Terjadi kesalahan: {e}")
