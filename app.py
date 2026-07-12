@@ -105,7 +105,7 @@ def calculate_priority(row):
         score = max(score, 2 + char_code)
     return score
 
-# --- FUNGSI GENERATE PDF ---
+# --- FUNGSI GENERATE PDF (SUDAH DIPERBAIKI) ---
 def generate_pdf_bytes(df_clean, logo_path):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -119,9 +119,6 @@ def generate_pdf_bytes(df_clean, logo_path):
     header_text_style = ParagraphStyle(
         'HeaderCenterText', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=11, leading=15, alignment=1
     )
-    rekap_style = ParagraphStyle(
-        'RekapStyle', parent=styles['Heading2'], fontName='Helvetica-Bold', fontSize=11, leading=14, alignment=1
-    )
     
     nama_stasiun = df_clean['station_name'].iloc[0].upper() if 'station_name' in df_clean.columns else "STASIUN METEOROLOGI"
     grouped = df_clean.groupby('date_group')
@@ -133,6 +130,8 @@ def generate_pdf_bytes(df_clean, logo_path):
         nama_bulan = BULAN_INDO[date.month]
         tanggal_format = f"{date.day:02d} {nama_bulan} {date.year}"
         judul_rekap = f"REKAP DATA METAR: {tanggal_format}".upper()
+        
+        # Judul sudah masuk di sini (Kop Surat)
         text_block = [
             Paragraph("<b>BALAI BESAR METEOROLOGI KLIMATOLOGI DAN GEOFISIKA WILAYAH III</b>", header_text_style),
             Paragraph(f"<b>{nama_stasiun}</b>", header_text_style),
@@ -163,9 +162,7 @@ def generate_pdf_bytes(df_clean, logo_path):
         story.append(header_table)
         story.append(Spacer(1, 10))
         
-        
-        story.append(Paragraph(f"<b>{judul_rekap}</b>", rekap_style))
-        story.append(Spacer(1, 8))
+        # --- BARIS YANG DOBEL DI SINI SUDAH DIHAPUS ---
         
         headers = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK']
         table_data = [headers]
