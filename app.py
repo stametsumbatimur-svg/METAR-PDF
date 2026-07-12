@@ -8,6 +8,8 @@ from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 # --- DICTIONARY BULAN BAHASA INDONESIA (KAPITAL) ---
 BULAN_INDO = {
@@ -202,16 +204,77 @@ def generate_pdf_bytes(df_clean, logo_path):
     buffer.seek(0)
     return buffer
 
-# --- ANTARMUKA WEB STREAMLIT ---
-st.set_page_config(page_title="METAR PDF Generator", layout="centered")
+# --- FUNGSI GENERATE EXCEL FORMATTED ---
+def generate_excel_bytes(df_clean):
+    buffer = io.BytesIO()
+    
+    # Kolom utama yang akan diexport ke Excel
+    headers = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK', 'datetime']
+    df_export = df_clean[headers].copy()
+    
+    # Konversi format datetime agar rapi dibaca di Excel
+    df_export['datetime'] = df_export['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+        df_export.to_excel(writer, sheet_name='Rekap METAR', index=False)
+        
+        workbook = writer.book
+        worksheet = writer.sheets['Rekap METAR']
+        
+        # Pengaturan Style Header (Navy Blue Accent)
+        header_font = Font(name='Segoe UI', size=11, bold=True, color='FFFFFF')
+        header_fill = PatternFill(start_color='1F4E78', end_color='1F4E78', fill_type='solid')
+        align_center = Alignment(horizontal='center', vertical='center')
+        align_left = Alignment(horizontal='left', vertical='center')
+        
+        thin_border = Border(
+            left=Side(style='thin', color='D9D9D9'),
+            right=Side(style='thin', color='D9D9D9'),
+            top=Side(style='thin', color='D9D9D9'),
+            bottom=Side(style='thin', color='D9D9D9')
+        )
+        
+        # Terapkan style ke baris header
+        for cell in worksheet[1]:
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = align_center
+            
+        # Terapkan style border dan alignment ke baris data
+        for row in worksheet.iter_rows(min_row=2, max_row=worksheet.max_row, min_col=1, max_col=worksheet.max_column):
+            for cell in row:
+                cell.border = thin_border
+                cell.font = Font(name='Segoe UI', size=10)
+                
+                # Cek nama header kolom bersangkutan untuk alignment
+                col_header = worksheet.cell(row=1, column=cell.column).value
+                if col_header in ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'T/DP', 'QNH']:
+                    cell.alignment = align_center
+                else:
+                    cell.alignment = align_left
+        
+        # Auto-fit ukuran lebar kolom secara adaptif
+        for col in worksheet.columns:
+            max_len = 0
+            col_letter = get_column_letter(col[0].column)
+            for cell in col:
+                if cell.value:
+                    max_len = max(max_len, len(str(cell.value)))
+            worksheet.column_dimensions[col_letter].width = max(max_len + 3, 11)
+            
+    buffer.seek(0)
+    return buffer
 
-st.title("✈️ METAR to PDF Converter")
-st.write("Aplikasi pengubah otomatis extract data CSV METAR menjadi PDF formal per jam (00-23 UTC) dengan penyaringan hierarki COR/CCA/CCB resmi.")
+# --- ANTARMUKA WEB STREAMLIT ---
+st.set_page_config(page_title="METAR Data Generator", layout="centered")
+
+st.title("✈️ METAR to PDF & Excel Converter")
+st.write("Aplikasi pengubah otomatis extract data CSV METAR menjadi PDF formal & spreadsheet Excel per jam (00-23 UTC) dengan penyaringan hierarki COR/CCA/CCB resmi.")
 
 LOGO_FILE = "logo_bmkg.png"
 
 if not os.path.exists(LOGO_FILE):
-    st.warning(f"⚠️ File gambar '{LOGO_FILE}' tidak terdeteksi di folder utama. Harap pastikan file logo sudah di-upload ke GitHub.")
+    st.warning(f"⚠️ File gambar '{LOGO_FILE}' tidak terdeteksi di folder utama. Harap pastikan file logo sudah di-upload ke folder project.")
 
 uploaded_file = st.file_uploader("Upload file CSV hasil extract sistem Anda", type=["csv"])
 
@@ -262,18 +325,38 @@ if uploaded_file is not None:
                     st.success(f"Berhasil! Data telah disaring ketat berdasarkan aturan koreksi meteorologi.")
                     
                     st.subheader("Preview Data Tervalidasi")
-                    st.dataframe(df_clean[['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'CLOUD', 'T/DP', 'QNH']].head(10), width='stretch')
+                    st.dataframe(df_clean[['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'CLOUD', 'T/DP', 'QNH']].head(10), use_container_width=True)
                     
+                    # Prosedur pembuatan file (PDF & Excel)
                     pdf_data = generate_pdf_bytes(df_clean, LOGO_FILE)
+                    excel_data = generate_excel_bytes(df_clean)
                     
                     first_date = df_clean['date_group'].iloc[0]
-                    nama_file_pdf = f"REKAP_METAR_{first_date.day:02d}_{BULAN_INDO[first_date.month]}_{first_date.year}.pdf"
+                    nama_file_base = f"REKAP_METAR_{first_date.day:02d}_{BULAN_INDO[first_date.month]}_{first_date.year}"
                     
-                    st.download_button(
-                        label="📥 Download PDF Rekap METAR Resmi",
-                        data=pdf_data,
-                        file_name=nama_file_pdf,
-                        mime="application/pdf"
-                    )
+                    st.write("---")
+                    st.subheader("Unduh Laporan Ekspor")
+                    
+                    # Tampilan Tombol Bersebelahan
+                    col_pdf, col_xlsx = st.columns(2)
+                    
+                    with col_pdf:
+                        st.download_button(
+                            label="📥 Download PDF Rekap Resmi",
+                            data=pdf_data,
+                            file_name=f"{nama_file_base}.pdf",
+                            mime="application/pdf",
+                            use_container_width=True
+                        )
+                        
+                    with col_xlsx:
+                        st.download_button(
+                            label="📊 Download Excel Spreadsheet",
+                            data=excel_data,
+                            file_name=f"{nama_file_base}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True
+                        )
+                        
     except Exception as e:
         st.error(f"Terjadi kesalahan saat memproses file: {e}")
