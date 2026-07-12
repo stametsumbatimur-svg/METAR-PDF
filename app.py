@@ -101,7 +101,6 @@ def calculate_priority(row):
     if row['is_cor']:
         score = 1
     if row['cc_type'] and len(row['cc_type']) == 3:
-        # CCA -> 2, CCB -> 3, CCC -> 4, dan seterusnya secara berurutan
         char_code = ord(row['cc_type'][2]) - ord('A')
         score = max(score, 2 + char_code)
     return score
@@ -208,11 +207,8 @@ def generate_pdf_bytes(df_clean, logo_path):
 def generate_excel_bytes(df_clean):
     buffer = io.BytesIO()
     
-    # Kolom utama yang akan diexport ke Excel
     headers = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK', 'datetime']
     df_export = df_clean[headers].copy()
-    
-    # Konversi format datetime agar rapi dibaca di Excel
     df_export['datetime'] = df_export['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S')
     
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
@@ -221,7 +217,6 @@ def generate_excel_bytes(df_clean):
         workbook = writer.book
         worksheet = writer.sheets['Rekap METAR']
         
-        # Pengaturan Style Header (Navy Blue Accent)
         header_font = Font(name='Segoe UI', size=11, bold=True, color='FFFFFF')
         header_fill = PatternFill(start_color='1F4E78', end_color='1F4E78', fill_type='solid')
         align_center = Alignment(horizontal='center', vertical='center')
@@ -234,26 +229,22 @@ def generate_excel_bytes(df_clean):
             bottom=Side(style='thin', color='D9D9D9')
         )
         
-        # Terapkan style ke baris header
         for cell in worksheet[1]:
             cell.font = header_font
             cell.fill = header_fill
             cell.alignment = align_center
             
-        # Terapkan style border dan alignment ke baris data
         for row in worksheet.iter_rows(min_row=2, max_row=worksheet.max_row, min_col=1, max_col=worksheet.max_column):
             for cell in row:
                 cell.border = thin_border
                 cell.font = Font(name='Segoe UI', size=10)
                 
-                # Cek nama header kolom bersangkutan untuk alignment
                 col_header = worksheet.cell(row=1, column=cell.column).value
                 if col_header in ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'T/DP', 'QNH']:
                     cell.alignment = align_center
                 else:
                     cell.alignment = align_left
         
-        # Auto-fit ukuran lebar kolom secara adaptif
         for col in worksheet.columns:
             max_len = 0
             col_letter = get_column_letter(col[0].column)
@@ -300,22 +291,11 @@ if uploaded_file is not None:
                 df_clean['raw_timestamp'] = df_clean['raw_timestamp'].str.replace(" +0000 UTC", "", regex=False)
                 df_clean['datetime'] = pd.to_datetime(df_clean['raw_timestamp'])
                 
-                # Filter menit genap :00 saja (per jam)
                 df_clean = df_clean[df_clean['datetime'].dt.minute == 0]
-                
-                # Hitung kolom Bobot Prioritas data
                 df_clean['priority_score'] = df_clean.apply(calculate_priority, axis=1)
-                
-                # URUTAN SORTING CERDAS: 
-                # 1. Kronologis Waktu (datetime)
-                # 2. Tingkat Koreksi Sandi (priority_score: CCB > CCA > COR > Normal)
-                # 3. Urutan Pengiriman Sistem (msg_id terbaru)
                 df_clean = df_clean.sort_values(by=['datetime', 'priority_score', 'msg_id'])
-                
-                # Buang data duplikat jam, pertahankan baris dengan kasta paling tinggi & paling baru
                 df_clean = df_clean.drop_duplicates(subset=['datetime'], keep='last')
                 
-                # Siapkan grup tanggal
                 df_clean['date_group'] = df_clean['datetime'].dt.date
                 df_clean = df_clean.sort_values(by='datetime').reset_index(drop=True)
                 
@@ -325,9 +305,9 @@ if uploaded_file is not None:
                     st.success(f"Berhasil! Data telah disaring ketat berdasarkan aturan koreksi meteorologi.")
                     
                     st.subheader("Preview Data Tervalidasi")
-                    st.dataframe(df_clean[['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'CLOUD', 'T/DP', 'QNH']].head(10), use_container_width=True)
+                    # FIX: Mengubah kembali parameter use_container_width menjadi width='stretch' sesuai log error versi baru
+                    st.dataframe(df_clean[['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'CLOUD', 'T/DP', 'QNH']].head(10), width='stretch')
                     
-                    # Prosedur pembuatan file (PDF & Excel)
                     pdf_data = generate_pdf_bytes(df_clean, LOGO_FILE)
                     excel_data = generate_excel_bytes(df_clean)
                     
@@ -337,25 +317,26 @@ if uploaded_file is not None:
                     st.write("---")
                     st.subheader("Unduh Laporan Ekspor")
                     
-                    # Tampilan Tombol Bersebelahan
                     col_pdf, col_xlsx = st.columns(2)
                     
                     with col_pdf:
+                        # FIX: Mengubah use_container_width pada tombol ke width='stretch'
                         st.download_button(
                             label="📥 Download PDF Rekap Resmi",
                             data=pdf_data,
                             file_name=f"{nama_file_base}.pdf",
                             mime="application/pdf",
-                            use_container_width=True
+                            width='stretch'
                         )
                         
                     with col_xlsx:
+                        # FIX: Mengubah use_container_width pada tombol ke width='stretch'
                         st.download_button(
                             label="📊 Download Excel Spreadsheet",
                             data=excel_data,
                             file_name=f"{nama_file_base}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            use_container_width=True
+                            width='stretch'
                         )
                         
     except Exception as e:
