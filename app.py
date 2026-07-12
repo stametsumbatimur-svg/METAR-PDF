@@ -134,8 +134,9 @@ def generate_pdf_bytes(df_clean, logo_path):
         tanggal_format = f"{date.day:02d} {nama_bulan} {date.year}"
         
         text_block = [
-            Paragraph("<b>BADAN METEOROLOGI KLIMATOLOGI DAN GEOFISIKA</b>", header_text_style),
+            Paragraph("<b>BALAI BESAR METEOROLOGI KLIMATOLOGI DAN GEOFISIKA WILAYAH III</b>", header_text_style),
             Paragraph(f"<b>{nama_stasiun}</b>", header_text_style),
+            Paragraph("<b>JL. ADI SUCIPTO NO. 3</b>", header_text_style),
         ]
         
         if logo_path and os.path.exists(logo_path):
