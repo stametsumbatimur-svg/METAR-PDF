@@ -68,7 +68,8 @@ def parse_metar(sandi_str):
             if re.match(r'^\d{5}(G\d{2})?KT$', t) or re.match(r'^VRB\d{2}KT$', t) or t == '00000KT':
                 wind = t
             elif re.match(r'^\d{2}/\d{2}$', t) or re.match(r'^M\d{2}/\d{2}$', t):
-                t_dp = t
+                # DIUBAH DI SINI: Ditambahkan spasi pada slash T/DP
+                t_dp = t.replace('/', ' / ')
             elif re.match(r'^Q\d{4}$', t):
                 qnh = t
             elif t in ['NOSIG', 'TEMPO', 'BECMG']:
@@ -85,7 +86,8 @@ def parse_metar(sandi_str):
             elif re.match(r'^(FEW|SCT|BKN|OVC)\d{3}$', t) or t in ['NSC', 'SKC', 'CLR']:
                 cloud_list.append(t)
             elif re.match(r'^\d{2}/\d{2}$', t) or re.match(r'^M\d{2}/\d{2}$', t):
-                t_dp = t
+                # DIUBAH DI SINI: Ditambahkan spasi pada slash T/DP
+                t_dp = t.replace('/', ' / ')
             elif re.match(r'^Q\d{4}$', t):
                 qnh = t
             elif t in ['NOSIG', 'TEMPO', 'BECMG']:
@@ -95,7 +97,7 @@ def parse_metar(sandi_str):
             
     return [metar, loc, time_str, wind, vis, wx, cloud, t_dp, qnh, rmk, is_cor, cc_type]
 
-# --- FUNGSI HITUNG BOBOT PRIORITAS DATA ---
+# --- HITUNG BOBOT PRIORITAS DATA ---
 def calculate_priority(row):
     score = 0
     if row['is_cor']:
@@ -105,7 +107,7 @@ def calculate_priority(row):
         score = max(score, 2 + char_code)
     return score
 
-# --- FUNGSI GENERATE PDF (SUDAH DIPERBAIKI) ---
+# --- GENERATE PDF ---
 def generate_pdf_bytes(df_clean, logo_path):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -130,8 +132,6 @@ def generate_pdf_bytes(df_clean, logo_path):
         nama_bulan = BULAN_INDO[date.month]
         tanggal_format = f"{date.day:02d} {nama_bulan} {date.year}"
         judul_rekap = f"REKAP DATA METAR: {tanggal_format}".upper()
-        
-        # Judul sudah masuk di sini (Kop Surat)
         text_block = [
             Paragraph("<b>BALAI BESAR METEOROLOGI KLIMATOLOGI DAN GEOFISIKA WILAYAH III</b>", header_text_style),
             Paragraph(f"<b>{nama_stasiun}</b>", header_text_style),
@@ -161,8 +161,6 @@ def generate_pdf_bytes(df_clean, logo_path):
             
         story.append(header_table)
         story.append(Spacer(1, 10))
-        
-        # --- BARIS YANG DOBEL DI SINI SUDAH DIHAPUS ---
         
         headers = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK']
         table_data = [headers]
@@ -202,7 +200,7 @@ def generate_pdf_bytes(df_clean, logo_path):
     buffer.seek(0)
     return buffer
 
-# --- FUNGSI GENERATE EXCEL FORMATTED ---
+# --- GENERATE EXCEL ---
 def generate_excel_bytes(df_clean):
     buffer = io.BytesIO()
     
@@ -274,7 +272,7 @@ if uploaded_file is not None:
         if 'sandi' not in df.columns or 'data_timestamp' not in df.columns:
             st.error("Format CSV tidak sesuai! Pastikan terdapat kolom 'sandi' and 'data_timestamp'.")
         else:
-            with st.spinner("Sedang melakukan validasi data berdasarkan hierarki pembaruan resmi..."):
+            with st.spinner("Sedang memvalidasi data..."):
                 parsed_rows = []
                 for idx, row in df.iterrows():
                     res = parse_metar(row['sandi'])
@@ -303,7 +301,6 @@ if uploaded_file is not None:
                     st.success(f"Berhasil!")
                     
                     st.subheader("Preview Data Tervalidasi")
-                    # AMAN: Menghapus parameter width agar mengikuti auto-layout bawaan Streamlit
                     st.dataframe(df_clean[['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'CLOUD', 'T/DP', 'QNH']].head(10))
                     
                     pdf_data = generate_pdf_bytes(df_clean, LOGO_FILE)
@@ -318,7 +315,6 @@ if uploaded_file is not None:
                     col_pdf, col_xlsx = st.columns(2)
                     
                     with col_pdf:
-                        # AMAN: Menghapus parameter ukuran yang memicu Segfault biner
                         st.download_button(
                             label="📥 Download PDF",
                             data=pdf_data,
@@ -327,7 +323,6 @@ if uploaded_file is not None:
                         )
                         
                     with col_xlsx:
-                        # AMAN: Menghapus parameter ukuran yang memicu Segfault biner
                         st.download_button(
                             label="📊 Download Excel Spreadsheet",
                             data=excel_data,
