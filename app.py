@@ -4,7 +4,7 @@ import re
 import io
 import os
 from datetime import datetime
-from reportlab.lib.pagesizes import letter
+from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
@@ -112,7 +112,7 @@ def generate_pdf_bytes(df_clean, logo_path):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer, 
-        pagesize=letter,
+        pagesize=A4,
         rightMargin=25, leftMargin=25, topMargin=25, bottomMargin=25
     )
     story = []
