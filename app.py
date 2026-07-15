@@ -113,7 +113,7 @@ def generate_pdf_bytes(df_clean, logo_path):
     doc = SimpleDocTemplate(
         buffer, 
         pagesize=A4,
-        rightMargin=25, leftMargin=25, topMargin=25, bottomMargin=25
+        rightMargin=25, leftMargin=35, topMargin=25, bottomMargin=25
     )
     story = []
     
