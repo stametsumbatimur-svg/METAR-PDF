@@ -83,7 +83,7 @@ def parse_metar(sandi_str):
                 vis = t
             elif t in ['RA', 'DZ', 'SHRA', 'TSRA', 'TS', 'BR', 'HZ', 'FG', '-RA', '+RA']:
                 wx = t
-            elif re.match(r'^(FEW|SCT|BKN|OVC)\d{3}$', t) or t in ['NSC', 'SKC', 'CLR']:
+            elif re.match(r'^(FEW|SCT|BKN|OVC)\d{3}(CB|TCU)?$', t) or t in ['NSC', 'SKC', 'CLR']:
                 cloud_list.append(t)
             elif re.match(r'^\d{2}/\d{2}$', t) or re.match(r'^M\d{2}/\d{2}$', t):
                 # DIUBAH DI SINI: Ditambahkan spasi pada slash T/DP
