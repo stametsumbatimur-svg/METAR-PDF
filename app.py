@@ -300,8 +300,8 @@ if uploaded_file is not None:
                 else:
                     st.success(f"Berhasil!")
                     
-                    st.subheader("Preview Data Tervalidasi")
-                    st.dataframe(df_clean[['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'CLOUD', 'T/DP', 'QNH']].head(10))
+                    #st.subheader("Preview Data Tervalidasi")
+                    #st.dataframe(df_clean[['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'CLOUD', 'T/DP', 'QNH']].head(10))
                     
                     pdf_data = generate_pdf_bytes(df_clean, LOGO_FILE)
                     excel_data = generate_excel_bytes(df_clean)
@@ -310,7 +310,7 @@ if uploaded_file is not None:
                     nama_file_base = f"REKAP_METAR_{first_date.day:02d}_{BULAN_INDO[first_date.month]}_{first_date.year}"
                     
                     st.write("---")
-                    st.subheader("Unduh Laporan Ekspor")
+                    st.subheader("Unduh Laporan")
                     
                     col_pdf, col_xlsx = st.columns(2)
                     
@@ -324,7 +324,7 @@ if uploaded_file is not None:
                         
                     with col_xlsx:
                         st.download_button(
-                            label="📊 Download Excel Spreadsheet",
+                            label="📊 Download Excel",
                             data=excel_data,
                             file_name=f"{nama_file_base}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
