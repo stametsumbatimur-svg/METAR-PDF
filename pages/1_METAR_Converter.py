@@ -1,245 +1,334 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
+import re
 import io
-import calendar
+import os
+from datetime import datetime
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
-st.set_page_config(page_title="Data Extract Job", layout="wide")
-
-st.title("📊 EXCEL PARAMETER RATA-RATA KLIMAT")
-
-# --- RUMUS TEKANAN UAP AIR ---
-def hitung_tekanan_uap_excel(suhu, rh):
-    if pd.isna(suhu) or pd.isna(rh): return np.nan
-    es = 6.112 * np.exp((17.67 * suhu) / (suhu + 243.5))
-    e_actual = (rh / 100.0) * es
-    return round(e_actual * 10, 2) 
-
-# --- RUMUS DEWPOINT (TD) ---
-def hitung_dewpoint(suhu, rh):
-    if pd.isna(suhu) or pd.isna(rh): return np.nan
-    # Menggunakan konstanta Magnus-Tetens
-    a = 17.27
-    b = 237.7
-    alpha = ((a * suhu) / (b + suhu)) + np.log(rh / 100.0)
-    td = (b * alpha) / (a - alpha)
-    return round(td, 2)
-
-# --- PARAMETER MAPPING ---
-parameter_mapping = {
-    'pressure_qff_mb_derived': 'QFF RATA-2 HARIAN',
-    'pressure_qfe_mb_derived': 'QFE RATA-2 HARIAN',
-    'temp_drybulb_c_tttttt': 'SUHU UDARA RATA-2 HARIAN',
-    'Dewpoint': 'SUHU TITIK EMBUN (TD) RATA-2 HARIAN',  # <-- PARAMETER DEWPOINT DITAMBAHKAN
-    'relative_humidity_pc': 'KELEMBABAN UDARA RATA-2 HARIAN',
-    'wind_speed_ff': 'KECEPATAN ANGIN RATA-2 HARIAN',
-    'Tekanan_Uap_x10': 'TEKANAN UAP AIR RATA-2 HARIAN'
+# --- DICTIONARY BULAN BAHASA INDONESIA (KAPITAL) ---
+BULAN_INDO = {
+    1: "JANUARI", 2: "FEBRUARI", 3: "MARET", 4: "APRIL",
+    5: "MEI", 6: "JUNI", 7: "JULI", 8: "AGUSTUS",
+    9: "SEPTEMBER", 10: "OKTOBER", 11: "NOVEMBER", 12: "DESEMBER"
 }
 
-uploaded_file = st.file_uploader("Unggah file...", type=["csv"])
+# --- FUNGSI PARSING DENGAN DETEKSI KOREKSI (COR / CCA / CCB) ---
+def parse_metar(sandi_str):
+    if pd.isna(sandi_str):
+        return None
+    sandi_str = sandi_str.replace('\n', ' ').replace('\r', '').strip()
+    
+    # Cari posisi awal kata METAR
+    start_idx = sandi_str.find('METAR')
+    if start_idx == -1:
+        return None
+        
+    metar_core = sandi_str[start_idx:].replace('=', '').strip()
+    tokens = metar_core.split()
+    
+    metar, loc, time_str, wind, vis, wx, cloud, t_dp, qnh, rmk = "METAR", "NIL", "NIL", "NIL", "NIL", "NIL", "NIL", "NIL", "NIL", "NOSIG"
+    
+    # Flag indikator koreksi data
+    is_cor = False
+    cc_type = ""
+    
+    remaining_tokens = []
+    
+    # Fase 1: Identifikasi struktur utama dan flag koreksi
+    for t in tokens:
+        if t == 'METAR':
+            continue
+        elif t == 'COR':
+            is_cor = True
+            continue
+        elif re.match(r'^CC[A-Z]$', t):
+            cc_type = t.upper()
+            continue
+        elif re.match(r'^[A-Z]{4}$', t) and loc == "NIL":
+            loc = t
+            continue
+        elif re.match(r'^\d{6}Z$', t) and time_str == "NIL":
+            time_str = t
+            continue
+        else:
+            remaining_tokens.append(t)
+            
+    # Fase 2: Ekstraksi elemen cuaca penerbangan
+    if 'CAVOK' in remaining_tokens:
+        vis = 'CAVOK'
+        wx = ''      
+        cloud = ''   
+        for t in remaining_tokens:
+            if re.match(r'^\d{5}(G\d{2})?KT$', t) or re.match(r'^VRB\d{2}KT$', t) or t == '00000KT':
+                wind = t
+            elif re.match(r'^\d{2}/\d{2}$', t) or re.match(r'^M\d{2}/\d{2}$', t):
+                # DIUBAH DI SINI: Ditambahkan spasi pada slash T/DP
+                t_dp = t.replace('/', ' / ')
+            elif re.match(r'^Q\d{4}$', t):
+                qnh = t
+            elif t in ['NOSIG', 'TEMPO', 'BECMG']:
+                rmk = t
+    else:
+        cloud_list = []
+        for t in remaining_tokens:
+            if re.match(r'^\d{5}(G\d{2})?KT$', t) or re.match(r'^VRB\d{2}KT$', t) or t == '00000KT':
+                wind = t
+            elif re.match(r'^\d{4}$', t):
+                vis = t
+            elif t in ['RA', 'DZ', 'SHRA', 'TSRA', 'TS', 'BR', 'HZ', 'FG', '-RA', '+RA']:
+                wx = t
+            elif re.match(r'^(FEW|SCT|BKN|OVC)\d{3}(CB|TCU)?$', t) or t in ['NSC', 'SKC', 'CLR']:
+                cloud_list.append(t)
+            elif re.match(r'^\d{2}/\d{2}$', t) or re.match(r'^M\d{2}/\d{2}$', t):
+                # DIUBAH DI SINI: Ditambahkan spasi pada slash T/DP
+                t_dp = t.replace('/', ' / ')
+            elif re.match(r'^Q\d{4}$', t):
+                qnh = t
+            elif t in ['NOSIG', 'TEMPO', 'BECMG']:
+                rmk = t
+        if cloud_list:
+            cloud = " ".join(cloud_list)
+            
+    return [metar, loc, time_str, wind, vis, wx, cloud, t_dp, qnh, rmk, is_cor, cc_type]
+
+# --- HITUNG BOBOT PRIORITAS DATA ---
+def calculate_priority(row):
+    score = 0
+    if row['is_cor']:
+        score = 1
+    if row['cc_type'] and len(row['cc_type']) == 3:
+        char_code = ord(row['cc_type'][2]) - ord('A')
+        score = max(score, 2 + char_code)
+    return score
+
+# --- GENERATE PDF ---
+def generate_pdf_bytes(df_clean, logo_path):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, 
+        pagesize=A4,
+        rightMargin=25, leftMargin=35, topMargin=25, bottomMargin=25
+    )
+    story = []
+    
+    styles = getSampleStyleSheet()
+    header_text_style = ParagraphStyle(
+        'HeaderCenterText', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=11, leading=15, alignment=1
+    )
+    
+    nama_stasiun = df_clean['station_name'].iloc[0].upper() if 'station_name' in df_clean.columns else "STASIUN METEOROLOGI"
+    grouped = df_clean.groupby('date_group')
+    
+    for count, (date, group) in enumerate(grouped):
+        if count > 0:
+            story.append(PageBreak())
+            
+        nama_bulan = BULAN_INDO[date.month]
+        tanggal_format = f"{date.day:02d} {nama_bulan} {date.year}"
+        judul_rekap = f"REKAP DATA METAR: {tanggal_format}".upper()
+        text_block = [
+            Paragraph("<b>BALAI BESAR METEOROLOGI KLIMATOLOGI DAN GEOFISIKA WILAYAH III</b>", header_text_style),
+            Paragraph(f"<b>{nama_stasiun}</b>", header_text_style),
+            Paragraph("<b>JL. ADI SUCIPTO NO. 3</b>", header_text_style),
+            Paragraph(f"<b>{judul_rekap}</b>", header_text_style)
+        ]
+        
+        if logo_path and os.path.exists(logo_path):
+            logo_img = Image(logo_path, width=48, height=48)
+            header_table = Table([[logo_img, text_block, ""]], colWidths=[55, 452, 55])
+            header_table.setStyle(TableStyle([
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+                ('ALIGN', (0,0), (0,0), 'CENTER'),
+                ('ALIGN', (1,0), (1,0), 'CENTER'),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+                ('TOPPADDING', (0,0), (-1,-1), 0),
+                ('LINEBELOW', (0,0), (-1,-1), 1.5, colors.black),
+            ]))
+        else:
+            header_table = Table([[text_block]], colWidths=[562])
+            header_table.setStyle(TableStyle([
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+                ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+                ('LINEBELOW', (0,0), (-1,-1), 1.5, colors.black),
+            ]))
+            
+        story.append(header_table)
+        story.append(Spacer(1, 10))
+        
+        headers = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK']
+        table_data = [headers]
+        
+        base_table_style = [
+            ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
+            ('TOPPADDING', (0, 0), (-1, -1), 2.5),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 8),
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 8),
+        ]
+        
+        for idx, row in group.iterrows():
+            current_row_idx = len(table_data)
+            if row['VIS'] == 'CAVOK':
+                row_data = [
+                    str(row['METAR']), str(row['LOC']), str(row['TIME']), str(row['WIND']),
+                    'CAVOK', '', '', 
+                    str(row['T/DP']), str(row['QNH']), str(row['RMK'])
+                ]
+                base_table_style.append(('SPAN', (4, current_row_idx), (6, current_row_idx)))
+            else:
+                row_data = [str(row[h]) for h in headers]
+            table_data.append(row_data)
+            
+        col_widths = [45, 40, 55, 75, 42, 40, 105, 45, 50, 65]
+        metar_table = Table(table_data, colWidths=col_widths)
+        metar_table.setStyle(TableStyle(base_table_style))
+        story.append(metar_table)
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
+# --- GENERATE EXCEL ---
+def generate_excel_bytes(df_clean):
+    buffer = io.BytesIO()
+    
+    headers = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK', 'datetime']
+    df_export = df_clean[headers].copy()
+    df_export['datetime'] = df_export['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+        df_export.to_excel(writer, sheet_name='Rekap METAR', index=False)
+        
+        workbook = writer.book
+        worksheet = writer.sheets['Rekap METAR']
+        
+        header_font = Font(name='Segoe UI', size=11, bold=True, color='FFFFFF')
+        header_fill = PatternFill(start_color='1F4E78', end_color='1F4E78', fill_type='solid')
+        align_center = Alignment(horizontal='center', vertical='center')
+        align_left = Alignment(horizontal='left', vertical='center')
+        
+        thin_border = Border(
+            left=Side(style='thin', color='D9D9D9'),
+            right=Side(style='thin', color='D9D9D9'),
+            top=Side(style='thin', color='D9D9D9'),
+            bottom=Side(style='thin', color='D9D9D9')
+        )
+        
+        for cell in worksheet[1]:
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = align_center
+            
+        for row in worksheet.iter_rows(min_row=2, max_row=worksheet.max_row, min_col=1, max_col=worksheet.max_column):
+            for cell in row:
+                cell.border = thin_border
+                cell.font = Font(name='Segoe UI', size=10)
+                
+                col_header = worksheet.cell(row=1, column=cell.column).value
+                if col_header in ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'T/DP', 'QNH']:
+                    cell.alignment = align_center
+                else:
+                    cell.alignment = align_left
+        
+        for col in worksheet.columns:
+            max_len = 0
+            col_letter = get_column_letter(col[0].column)
+            for cell in col:
+                if cell.value:
+                    max_len = max(max_len, len(str(cell.value)))
+            worksheet.column_dimensions[col_letter].width = max(max_len + 3, 11)
+            
+    buffer.seek(0)
+    return buffer
+
+# --- ANTARMUKA WEB STREAMLIT ---
+st.set_page_config(page_title="METAR Data Generator", layout="centered")
+
+st.title("✈️ METAR to PDF & Excel Converter")
+
+LOGO_FILE = "logo_bmkg.png"
+
+if not os.path.exists(LOGO_FILE):
+    st.warning(f"⚠️ File gambar '{LOGO_FILE}' tidak terdeteksi di folder utama. Harap pastikan file logo sudah di-upload.")
+
+uploaded_file = st.file_uploader("Upload file CSV", type=["csv"])
 
 if uploaded_file is not None:
     try:
-        df_raw = pd.read_csv(uploaded_file)
+        df = pd.read_csv(uploaded_file)
         
-        # Cleansing
-        NA_VALUES = [9999, 99999, '9999', '/', '//', '///', '#REF!', '#VALUE!', 'STNR', '#N/A']
-        df_raw.replace(NA_VALUES, np.nan, inplace=True)
-        
-        # Parsing Waktu
-        df_raw['data_timestamp'] = pd.to_datetime(df_raw['data_timestamp'])
-        df_raw['Tahun'] = df_raw['data_timestamp'].dt.year
-        df_raw['Bulan_Angka'] = df_raw['data_timestamp'].dt.month
-        df_raw['Tanggal'] = df_raw['data_timestamp'].dt.day
-        df_raw['Jam'] = df_raw['data_timestamp'].dt.hour
-        
-        if 'temp_drybulb_c_tttttt' in df_raw.columns and 'relative_humidity_pc' in df_raw.columns:
-            # Hitung Tekanan Uap
-            df_raw['Tekanan_Uap_x10'] = df_raw.apply(
-                lambda row: hitung_tekanan_uap_excel(row['temp_drybulb_c_tttttt'], row['relative_humidity_pc']), axis=1)
-            
-            # Hitung Dewpoint
-            df_raw['Dewpoint'] = df_raw.apply(
-                lambda row: hitung_dewpoint(row['temp_drybulb_c_tttttt'], row['relative_humidity_pc']), axis=1)
-        
-        df_raw['Bulan_Tahun'] = df_raw['Tahun'].astype(str) + "-" + df_raw['Bulan_Angka'].astype(str).str.zfill(2)
-        
-        st.markdown("---")
-        bulan_dipilih = st.selectbox("Pilih Bulan untuk di-Generate:", sorted(df_raw['Bulan_Tahun'].unique()))
-        df_bulan_ini = df_raw[df_raw['Bulan_Tahun'] == bulan_dipilih]
-        
-        tahun_val = int(bulan_dipilih.split('-')[0])
-        bulan_val = int(bulan_dipilih.split('-')[1])
-        nama_bulan = calendar.month_name[bulan_val].upper()
-        jml_hari = calendar.monthrange(tahun_val, bulan_val)[1]
-        semua_tanggal = pd.Index(range(1, jml_hari + 1), name='NO.')
-
-        # =====================================================================
-        # PROSES EXCEL DENGAN NUMBER FORMATTING
-        # =====================================================================
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-            wb = writer.book
-            ws = wb.add_worksheet('MATRIKS')
-            
-            # Format Cell
-            fmt_teks = wb.add_format({'bold': True, 'align': 'left'})
-            fmt_judul = wb.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'font_size': 12})
-            fmt_header = wb.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#D9D9D9'})
-            fmt_blank = wb.add_format({'align': 'center', 'valign': 'vcenter', 'border': 1})
-            fmt_blank_rata2 = wb.add_format({'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#DCE6F1'})
-            fmt_qff_biasa = wb.add_format({'align': 'center', 'valign': 'vcenter', 'border': 1, 'num_format': '0000'}) 
-            fmt_int_biasa = wb.add_format({'align': 'center', 'valign': 'vcenter', 'border': 1, 'num_format': '0'})     
-            fmt_float_biasa = wb.add_format({'align': 'center', 'valign': 'vcenter', 'border': 1, 'num_format': '0.0'}) 
-            fmt_int_rata2 = wb.add_format({'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#DCE6F1', 'num_format': '0'})
-            fmt_float_rata2 = wb.add_format({'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#DCE6F1', 'num_format': '0.0'})
-            fmt_summary_judul = wb.add_format({'bold': True, 'align': 'right', 'valign': 'vcenter', 'border': 1, 'bg_color': '#FFF2CC'})
-            fmt_summary_kosong = wb.add_format({'border': 1, 'bg_color': '#FFF2CC'})
-            fmt_summary_final_int = wb.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#FCD5B4', 'num_format': '0'})
-            fmt_summary_final_float = wb.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#FCD5B4', 'num_format': '0.0'})
-            fmt_summary_final_blank = wb.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#FCD5B4'})
-            
-            ws.set_column('A:A', 6)
-            ws.set_column('B:Y', 5)
-            ws.set_column('Z:Z', 13)
-            ws.set_column('AA:AC', 10) 
-            
-            start_row = 0
-            
-            def get_cell(val, param, col_type):
-                if pd.isna(val): 
-                    return "", (fmt_blank_rata2 if col_type == 'RATA2' else fmt_blank)
+        if 'sandi' not in df.columns or 'data_timestamp' not in df.columns:
+            st.error("Format CSV tidak sesuai! Pastikan terdapat kolom 'sandi' and 'data_timestamp'.")
+        else:
+            with st.spinner("Sedang memvalidasi data..."):
+                parsed_rows = []
+                for idx, row in df.iterrows():
+                    res = parse_metar(row['sandi'])
+                    if res:
+                        station = row['station_name'] if 'station_name' in df.columns else "STASIUN METEOROLOGI"
+                        msg_id = row['id'] if 'id' in df.columns else idx
+                        parsed_rows.append(res + [row['data_timestamp'], station, msg_id])
+                        
+                columns = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK', 'is_cor', 'cc_type', 'raw_timestamp', 'station_name', 'msg_id']
+                df_clean = pd.DataFrame(parsed_rows, columns=columns)
                 
-                # KECEPATAN ANGIN
-                if 'KECEPATAN ANGIN' in param:
-                    v = int(round(float(val)))
-                    if v == 0:
-                        return "", (fmt_blank_rata2 if col_type == 'RATA2' else fmt_blank)
-                    return v, (fmt_int_rata2 if col_type == 'RATA2' else fmt_int_biasa)
+                df_clean['raw_timestamp'] = df_clean['raw_timestamp'].str.replace(" +0000 UTC", "", regex=False)
+                df_clean['datetime'] = pd.to_datetime(df_clean['raw_timestamp'])
                 
-                # QFF / QFE / SUHU UDARA / DEWPOINT (0-23)
-                if 'QFF' in param or 'QFE' in param or 'SUHU' in param:
-                    if col_type == '0-23':
-                        if 'SUHU' in param: # Ini juga mencakup "SUHU TITIK EMBUN (TD)"
-                            return int(round(float(val) * 10)), fmt_int_biasa
-                        
-                        return (int(round(float(val) * 10)) % 10000), fmt_qff_biasa
-                    else:
-                        return round(float(val), 1), (fmt_float_rata2 if col_type == 'RATA2' else fmt_float_biasa)
+                df_clean = df_clean[df_clean['datetime'].dt.minute == 0]
+                df_clean['priority_score'] = df_clean.apply(calculate_priority, axis=1)
+                df_clean = df_clean.sort_values(by=['datetime', 'priority_score', 'msg_id'])
+                df_clean = df_clean.drop_duplicates(subset=['datetime'], keep='last')
                 
-                # RH / UAP AIR
-                if 'KELEMBABAN' in param or 'UAP AIR' in param:
-                    if col_type == 'RATA2': 
-                        return round(float(val), 1), fmt_float_rata2
-                    return int(round(float(val))), fmt_int_biasa
+                df_clean['date_group'] = df_clean['datetime'].dt.date
+                df_clean = df_clean.sort_values(by='datetime').reset_index(drop=True)
                 
-                return round(float(val), 1), (fmt_float_rata2 if col_type == 'RATA2' else fmt_float_biasa)
-
-            # LOOOPING PARAMETER
-            for kolom_csv, judul_param in parameter_mapping.items():
-                if kolom_csv in df_bulan_ini.columns:
+                if df_clean.empty:
+                    st.warning("Tidak ditemukan data dengan menit :00 (per jam) di dalam file ini.")
+                else:
+                    st.success(f"Berhasil!")
                     
-                    df_bulan_ini.loc[:, kolom_csv] = pd.to_numeric(df_bulan_ini[kolom_csv], errors='coerce')
-                    pivot = df_bulan_ini.pivot_table(index='Tanggal', columns='Jam', values=kolom_csv, aggfunc='first')
+                    #st.subheader("Preview Data Tervalidasi")
+                    #st.dataframe(df_clean[['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'CLOUD', 'T/DP', 'QNH']].head(10))
                     
-                    for h in range(24):
-                        if h not in pivot.columns: pivot[h] = np.nan
-                    pivot = pivot[list(range(24))]
-                    pivot = pivot.reindex(semua_tanggal)
+                    pdf_data = generate_pdf_bytes(df_clean, LOGO_FILE)
+                    excel_data = generate_excel_bytes(df_clean)
                     
-                    rata_harian = pivot.mean(axis=1)
-                    if 'UAP AIR' in judul_param: rata_harian = rata_harian / 10
-
-                    if 'UAP AIR' in judul_param:
-                        extra_headers = []
-                        summary_labels = []
-                    elif 'KECEPATAN ANGIN' in judul_param:
-                        extra_headers = ['MAX HARIAN']
-                        daily_max_angin = pivot.max(axis=1)
-                        summary_labels = [("MAXIMUM BULAN INI", pivot.max().max())]
-                    else:
-                        extra_headers = ['23 00', '05 00', '10 00']
-                        summary_labels = [
-                            ("MAXIMUM BULAN INI", pivot.max().max()), 
-                            ("MINIMUM BULAN INI", pivot.min().min()), 
-                            ("TOTAL RATA-RATA", rata_harian.mean())
-                        ]
+                    first_date = df_clean['date_group'].iloc[0]
+                    nama_file_base = f"REKAP_METAR_{first_date.day:02d}_{BULAN_INDO[first_date.month]}_{first_date.year}"
                     
-                    # Tulis Header
-                    ws.write(start_row, 1, "BULAN", fmt_teks)
-                    ws.write(start_row, 3, nama_bulan, fmt_teks)
-                    ws.write(start_row, 4, str(tahun_val), fmt_teks)
-                    ws.write(start_row + 1, 12, judul_param, fmt_judul)
+                    st.write("---")
+                    st.subheader("Unduh Laporan")
                     
-                    ws.write(start_row + 2, 0, "NO.", fmt_header)
-                    for i in range(24): ws.write(start_row + 2, i + 1, str(i), fmt_header)
-                    ws.write(start_row + 2, 25, "R A T A   2", fmt_header)
+                    col_pdf, col_xlsx = st.columns(2)
                     
-                    for c_i, ext_hdr in enumerate(extra_headers):
-                        ws.write(start_row + 2, 26 + c_i, ext_hdr, fmt_header)
-                    
-                    row_idx = start_row + 3
-                    
-                    # TULIS DATA TANGGAL 1-31
-                    for tgl in semua_tanggal:
-                        ws.write(row_idx, 0, tgl, fmt_header)
+                    with col_pdf:
+                        st.download_button(
+                            label="📥 Download PDF",
+                            data=pdf_data,
+                            file_name=f"{nama_file_base}.pdf",
+                            mime="application/pdf"
+                        )
                         
-                        # Data 0-23
-                        for h in range(24):
-                            val, fmt = get_cell(pivot.loc[tgl, h], judul_param, '0-23')
-                            ws.write(row_idx, h + 1, val, fmt)
+                    with col_xlsx:
+                        st.download_button(
+                            label="📊 Download Excel",
+                            data=excel_data,
+                            file_name=f"{nama_file_base}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
                         
-                        # Data RATA 2
-                        val_rata, fmt_rata = get_cell(rata_harian.loc[tgl], judul_param, 'RATA2')
-                        ws.write(row_idx, 25, val_rata, fmt_rata)
-                        
-                        # Data Tambahan Kanan
-                        if 'UAP AIR' in judul_param:
-                            pass
-                        elif 'KECEPATAN ANGIN' in judul_param:
-                            v_max = daily_max_angin.loc[tgl]
-                            if pd.isna(v_max) or float(v_max) == 0:
-                                ws.write(row_idx, 26, "", fmt_blank)
-                            else:
-                                ws.write(row_idx, 26, int(round(float(v_max))), fmt_int_biasa) # NUMBER
-                        else:
-                            for c_idx, h_spec in zip([26, 27, 28], [23, 5, 10]):
-                                val_s, fmt_s = get_cell(pivot.loc[tgl, h_spec], judul_param, 'SPEC')
-                                ws.write(row_idx, c_idx, val_s, fmt_s)
-                        
-                        row_idx += 1
-                        
-                    # TULIS SUMMARY BAWAH
-                    for label, final_val in summary_labels:
-                        ws.merge_range(row_idx, 0, row_idx, 24, label, fmt_summary_judul)
-                        
-                        if pd.isna(final_val):
-                            ws.write(row_idx, 25, "", fmt_summary_final_blank)
-                        else:
-                            if 'KECEPATAN ANGIN' in judul_param:
-                                v_ang = int(round(float(final_val)))
-                                if v_ang == 0:
-                                    ws.write(row_idx, 25, "", fmt_summary_final_blank)
-                                else:
-                                    ws.write(row_idx, 25, v_ang, fmt_summary_final_int) # NUMBER
-                            else:
-                                ws.write(row_idx, 25, round(float(final_val), 1), fmt_summary_final_float) # NUMBER
-                        
-                        for c_i in range(len(extra_headers)):
-                            ws.write(row_idx, 26 + c_i, "", fmt_summary_kosong)
-                        
-                        row_idx += 1
-                        
-                    start_row = row_idx + 3 
-
-        st.success("✅ Sukses!")
-        st.download_button(
-            label=f"📥 Unduh... ({bulan_dipilih})",
-            data=buffer.getvalue(),
-            file_name=f"Matriks_{bulan_dipilih}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
-            
     except Exception as e:
-        st.error(f"Terjadi kesalahan saat memproses data: {e}")
+        st.error(f"Terjadi kesalahan: {e}")
