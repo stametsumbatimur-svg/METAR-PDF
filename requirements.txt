@@ -1,2 +1,6 @@
-openpyxl
+streamlit
+pandas
+numpy
 reportlab
+openpyxl
+xlsxwriter
