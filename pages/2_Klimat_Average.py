@@ -8,6 +8,14 @@ st.set_page_config(page_title="Data Extract Job", layout="wide")
 
 st.title("📊 EXCEL PARAMETER RATA-RATA KLIMAT")
 
+# --- KODE PETUNJUK PENGGUNAAN ---
+with st.expander("ℹ️ Klik di sini untuk melihat Petunjuk Penggunaan"):
+    st.markdown("""
+    **Syarat File CSV:**
+    - File hasil extract dari "https://bmkgsatu.bmkg.go.id/exportdata".
+    """)
+# --------------------------------
+
 # --- RUMUS TEKANAN UAP AIR ---
 def hitung_tekanan_uap_excel(suhu, rh):
     if pd.isna(suhu) or pd.isna(rh): return np.nan
