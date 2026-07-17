@@ -1,14 +1,20 @@
 import streamlit as st
 
-st.set_page_config(
-    page_title="Portal Data Cuaca",
-    page_icon="⛅",
-    layout="centered"
-)
+st.set_page_config(page_title="hello Kamila", page_icon="⛅", layout="centered")
 
-st.title("⛅ Selamat Datang di Portal Data Cuaca")
-st.write("Silakan pilih alat yang ingin Anda gunakan melalui menu di sebelah kiri (sidebar):")
+st.title("⛅ Kamila ")
+
+# Kotak pesan berwarna biru
+st.info("👋 Selamat datang! Aplikasi ini dibuat untuk mempermudah pengolahan data laporan bulanan.")
+
 st.markdown("""
-- **METAR Converter**: Untuk memparsing data sandi METAR ke PDF & Excel.
-- **Klimat Average**: Untuk menghitung rata-rata parameter klimatologi dan mengekspor matriks Excel.
+Silakan pilih menu di **Sidebar sebelah kiri** untuk mulai menggunakan aplikasi:
+
+1. **METAR Converter** ✈️ 
+   *Gunakan ini untuk mengekstrak dan merapikan sandi METAR ke format PDF atau Excel.*
+2. **Klimat Average** 📊
+   *Gunakan ini untuk menghitung rata-rata harian (suhu, RH, QFF, QFE, dll) dan mengekspor matriks Excel.*
+
+---
+*Catatan: Pastikan format file Anda adalah CSV (.csv).*
 """)
