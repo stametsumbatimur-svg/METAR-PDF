@@ -258,6 +258,14 @@ st.set_page_config(page_title="METAR Data Generator", layout="centered")
 
 st.title("✈️ METAR to PDF & Excel Converter")
 
+# --- KODE PETUNJUK PENGGUNAAN ---
+with st.expander("ℹ️ Klik di sini untuk melihat Petunjuk Penggunaan"):
+    st.markdown("""
+    **Syarat File CSV:**
+    - File hasil extract dari "https://bmkgsatu.bmkg.go.id/extractgts" data METAR dengan status SENT.
+    """)
+# --------------------------------
+
 LOGO_FILE = "logo_bmkg.png"
 
 if not os.path.exists(LOGO_FILE):
