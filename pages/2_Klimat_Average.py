@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import io
 import calendar
+import re
 
 st.set_page_config(page_title="Data Extract Job", layout="wide")
 
@@ -42,7 +43,7 @@ parameter_mapping = {
     'relative_humidity_pc': 'KELEMBABAN UDARA RATA-2 HARIAN',
     'wind_speed_ff': 'KECEPATAN ANGIN RATA-2 HARIAN',
     'Tekanan_Uap_x10': 'TEKANAN UAP AIR RATA-2 HARIAN',
-    # <-- DI SINI PERUBAHANNYA: MENAMBAHKAN PARAMETER 5APP
+    # Parameter 5APP dimasukkan ke sini
     'pressure_3h_diff_mb_ppp': 'PERUBAHAN TEKANAN 3 JAM (5APP) RATA-2 HARIAN'
 }
 
@@ -76,7 +77,7 @@ if uploaded_file is not None:
         
         st.markdown("---")
         bulan_dipilih = st.selectbox("Pilih Bulan untuk di-Generate:", sorted(df_raw['Bulan_Tahun'].unique()))
-        df_bulan_ini = df_raw[df_raw['Bulan_Tahun'] == bulan_dipilih]
+        df_bulan_ini = df_raw[df_raw['Bulan_Tahun'] == bulan_dipilih].copy()
         
         tahun_val = int(bulan_dipilih.split('-')[0])
         bulan_val = int(bulan_dipilih.split('-')[1])
@@ -127,14 +128,23 @@ if uploaded_file is not None:
                         return "", (fmt_blank_rata2 if col_type == 'RATA2' else fmt_blank)
                     return v, (fmt_int_rata2 if col_type == 'RATA2' else fmt_int_biasa)
                 
-                # QFF / QFE / SUHU UDARA / DEWPOINT (0-23)
-                if 'QFF' in param or 'QFE' in param or 'SUHU' in param:
+                # QFF / QFE / SUHU UDARA / DEWPOINT / PERUBAHAN TEKANAN (0-23)
+                if 'QFF' in param or 'QFE' in param or 'SUHU' in param or 'PERUBAHAN TEKANAN' in param:
                     if col_type == '0-23':
-                        if 'SUHU' in param: # Ini juga mencakup "SUHU TITIK EMBUN (TD)"
+                        if 'SUHU' in param: 
                             return int(round(float(val) * 10)), fmt_int_biasa
+                        
+                        # <-- MENULIS FORMAT SANDI 4 DIGIT (TANPA INDIKATOR 5)
+                        if 'PERUBAHAN TEKANAN' in param:
+                            return int(val), fmt_qff_biasa
                         
                         return (int(round(float(val) * 10)) % 10000), fmt_qff_biasa
                     else:
+                        # Untuk kolom penunjuk jam spesifik kanan (23, 05, 10) pada parameter 5APP
+                        if 'PERUBAHAN TEKANAN' in param and col_type == 'SPEC':
+                            return int(val), fmt_qff_biasa
+                            
+                        # Kolom RATA-RATA menggunakan nilai riil float asli (misal: -0.6 atau 1.2)
                         return round(float(val), 1), (fmt_float_rata2 if col_type == 'RATA2' else fmt_float_biasa)
                 
                 # RH / UAP AIR
@@ -149,16 +159,48 @@ if uploaded_file is not None:
             for kolom_csv, judul_param in parameter_mapping.items():
                 if kolom_csv in df_bulan_ini.columns:
                     
-                    df_bulan_ini.loc[:, kolom_csv] = pd.to_numeric(df_bulan_ini[kolom_csv], errors='coerce')
-                    pivot = df_bulan_ini.pivot_table(index='Tanggal', columns='Jam', values=kolom_csv, aggfunc='first')
+                    # 1. Simpan hitungan rata-rata harian dengan nilai desimal/float asli
+                    df_float_check = df_bulan_ini.copy()
+                    df_float_check[kolom_csv] = pd.to_numeric(df_float_check[kolom_csv], errors='coerce')
+                    pivot_float = df_float_check.pivot_table(index='Tanggal', columns='Jam', values=kolom_csv, aggfunc='first')
+                    for h in range(24):
+                        if h not in pivot_float.columns: pivot_float[h] = np.nan
+                    pivot_float = pivot_float[list(range(24))]
+                    pivot_float = pivot_float.reindex(semua_tanggal)
+                    rata_harian = pivot_float.mean(axis=1)
+                    if 'UAP AIR' in judul_param: rata_harian = rata_harian / 10
+
+                    # 2. Proses konversi khusus menjadi Sandi 4 Digit untuk Jam 0-23
+                    if kolom_csv == 'pressure_3h_diff_mb_ppp' and 'encoded_synop' in df_bulan_ini.columns:
+                        def to_sandi_4d_int(row):
+                            val = row['pressure_3h_diff_mb_ppp']
+                            if pd.isna(val): return np.nan
+                            synop = row['encoded_synop']
+                            if pd.notna(synop):
+                                expected_ppp = f"{int(round(abs(val) * 10)):03d}"
+                                section1 = synop.split('333')[0]
+                                tokens = re.findall(r'\b5\d{4}\b', section1)
+                                for token in tokens:
+                                    if token.endswith(expected_ppp):
+                                        return int(token[1:]) # Buang angka 5 di depan
+                                for a in range(10):
+                                    candidate = f"5{a}{expected_ppp}"
+                                    if candidate in section1:
+                                        return int(candidate[1:])
+                            # Fallback otomatis berdasarkan tanda negatif/positif jika synop kosong
+                            a_code = "3" if val >= 0 else "8"
+                            return int(f"{a_code}{int(round(abs(val) * 10)):03d}")
+                        
+                        df_bulan_ini['sandi_5app'] = df_bulan_ini.apply(to_sandi_4d_int, axis=1)
+                        pivot = df_bulan_ini.pivot_table(index='Tanggal', columns='Jam', values='sandi_5app', aggfunc='first')
+                    else:
+                        df_bulan_ini.loc[:, kolom_csv] = pd.to_numeric(df_bulan_ini[kolom_csv], errors='coerce')
+                        pivot = df_bulan_ini.pivot_table(index='Tanggal', columns='Jam', values=kolom_csv, aggfunc='first')
                     
                     for h in range(24):
                         if h not in pivot.columns: pivot[h] = np.nan
                     pivot = pivot[list(range(24))]
                     pivot = pivot.reindex(semua_tanggal)
-                    
-                    rata_harian = pivot.mean(axis=1)
-                    if 'UAP AIR' in judul_param: rata_harian = rata_harian / 10
 
                     if 'UAP AIR' in judul_param:
                         extra_headers = []
@@ -170,8 +212,8 @@ if uploaded_file is not None:
                     else:
                         extra_headers = ['23 00', '05 00', '10 00']
                         summary_labels = [
-                            ("MAXIMUM BULAN INI", pivot.max().max()), 
-                            ("MINIMUM BULAN INI", pivot.min().min()), 
+                            ("MAXIMUM BULAN INI", pivot_float.max().max()), 
+                            ("MINIMUM BULAN INI", pivot_float.min().min()), 
                             ("TOTAL RATA-RATA", rata_harian.mean())
                         ]
                     
@@ -194,12 +236,12 @@ if uploaded_file is not None:
                     for tgl in semua_tanggal:
                         ws.write(row_idx, 0, tgl, fmt_header)
                         
-                        # Data 0-23
+                        # Data 0-23 (Menampilkan Sandi 4 Digit)
                         for h in range(24):
                             val, fmt = get_cell(pivot.loc[tgl, h], judul_param, '0-23')
                             ws.write(row_idx, h + 1, val, fmt)
                         
-                        # Data RATA 2
+                        # Data RATA 2 (Menampilkan Angka Desimal Riil Rata-rata)
                         val_rata, fmt_rata = get_cell(rata_harian.loc[tgl], judul_param, 'RATA2')
                         ws.write(row_idx, 25, val_rata, fmt_rata)
                         
@@ -211,7 +253,7 @@ if uploaded_file is not None:
                             if pd.isna(v_max) or float(v_max) == 0:
                                 ws.write(row_idx, 26, "", fmt_blank)
                             else:
-                                ws.write(row_idx, 26, int(round(float(v_max))), fmt_int_biasa) # NUMBER
+                                ws.write(row_idx, 26, int(round(float(v_max))), fmt_int_biasa)
                         else:
                             for c_idx, h_spec in zip([26, 27, 28], [23, 5, 10]):
                                 val_s, fmt_s = get_cell(pivot.loc[tgl, h_spec], judul_param, 'SPEC')
@@ -231,9 +273,9 @@ if uploaded_file is not None:
                                 if v_ang == 0:
                                     ws.write(row_idx, 25, "", fmt_summary_final_blank)
                                 else:
-                                    ws.write(row_idx, 25, v_ang, fmt_summary_final_int) # NUMBER
+                                    ws.write(row_idx, 25, v_ang, fmt_summary_final_int)
                             else:
-                                ws.write(row_idx, 25, round(float(final_val), 1), fmt_summary_final_float) # NUMBER
+                                ws.write(row_idx, 25, round(float(final_val), 1), fmt_summary_final_float)
                         
                         for c_i in range(len(extra_headers)):
                             ws.write(row_idx, 26 + c_i, "", fmt_summary_kosong)
