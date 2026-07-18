@@ -43,8 +43,8 @@ parameter_mapping = {
     'relative_humidity_pc': 'KELEMBABAN UDARA RATA-2 HARIAN',
     'wind_speed_ff': 'KECEPATAN ANGIN RATA-2 HARIAN',
     'Tekanan_Uap_x10': 'TEKANAN UAP AIR RATA-2 HARIAN',
-    # Parameter 5APP dimasukkan ke sini
-    'pressure_3h_diff_mb_ppp': 'PERUBAHAN TEKANAN 3 JAM (5APP) RATA-2 HARIAN'
+    'pressure_3h_diff_mb_ppp': 'PERUBAHAN TEKANAN 3 JAM (5APP) RATA-2 HARIAN',
+    'pressure_24h_diff_mb_p24': 'PERUBAHAN TEKANAN 24 JAM (58/59P24) RATA-2 HARIAN'
 }
 
 uploaded_file = st.file_uploader("Unggah file...", type=["csv"])
@@ -100,6 +100,10 @@ if uploaded_file is not None:
             fmt_blank = wb.add_format({'align': 'center', 'valign': 'vcenter', 'border': 1})
             fmt_blank_rata2 = wb.add_format({'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#DCE6F1'})
             fmt_qff_biasa = wb.add_format({'align': 'center', 'valign': 'vcenter', 'border': 1, 'num_format': '0000'}) 
+            
+            # <-- BARU: FORMAT KHUSUS 3 DIGIT UNTUK SANDI 24 JAM (Agar 000 / 007 tetap memiliki leading zero)
+            fmt_p24_biasa = wb.add_format({'align': 'center', 'valign': 'vcenter', 'border': 1, 'num_format': '000'}) 
+            
             fmt_int_biasa = wb.add_format({'align': 'center', 'valign': 'vcenter', 'border': 1, 'num_format': '0'})     
             fmt_float_biasa = wb.add_format({'align': 'center', 'valign': 'vcenter', 'border': 1, 'num_format': '0.0'}) 
             fmt_int_rata2 = wb.add_format({'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#DCE6F1', 'num_format': '0'})
@@ -134,17 +138,22 @@ if uploaded_file is not None:
                         if 'SUHU' in param: 
                             return int(round(float(val) * 10)), fmt_int_biasa
                         
-                        # <-- MENULIS FORMAT SANDI 4 DIGIT (TANPA INDIKATOR 5)
-                        if 'PERUBAHAN TEKANAN' in param:
+                        # Format 4 Digit untuk 3 Jam (5APP) -> cth: 7002
+                        if '3 JAM' in param:
                             return int(val), fmt_qff_biasa
+                        
+                        # <-- BARU: Format 3 Digit untuk 24 Jam -> cth: 000, 007, 502
+                        if '24 JAM' in param:
+                            return int(val), fmt_p24_biasa
                         
                         return (int(round(float(val) * 10)) % 10000), fmt_qff_biasa
                     else:
-                        # Untuk kolom penunjuk jam spesifik kanan (23, 05, 10) pada parameter 5APP
-                        if 'PERUBAHAN TEKANAN' in param and col_type == 'SPEC':
+                        if '3 JAM' in param and col_type == 'SPEC':
                             return int(val), fmt_qff_biasa
+                        # <-- BARU: Format 3 Digit untuk Kolom Kanan Spesifik 24 Jam
+                        if '24 JAM' in param and col_type == 'SPEC':
+                            return int(val), fmt_p24_biasa
                             
-                        # Kolom RATA-RATA menggunakan nilai riil float asli (misal: -0.6 atau 1.2)
                         return round(float(val), 1), (fmt_float_rata2 if col_type == 'RATA2' else fmt_float_biasa)
                 
                 # RH / UAP AIR
@@ -159,7 +168,7 @@ if uploaded_file is not None:
             for kolom_csv, judul_param in parameter_mapping.items():
                 if kolom_csv in df_bulan_ini.columns:
                     
-                    # 1. Simpan hitungan rata-rata harian dengan nilai desimal/float asli
+                    # 1. Simpan hitungan rata-rata harian berbasis data riil desimal
                     df_float_check = df_bulan_ini.copy()
                     df_float_check[kolom_csv] = pd.to_numeric(df_float_check[kolom_csv], errors='coerce')
                     pivot_float = df_float_check.pivot_table(index='Tanggal', columns='Jam', values=kolom_csv, aggfunc='first')
@@ -170,9 +179,9 @@ if uploaded_file is not None:
                     rata_harian = pivot_float.mean(axis=1)
                     if 'UAP AIR' in judul_param: rata_harian = rata_harian / 10
 
-                    # 2. Proses konversi khusus menjadi Sandi 4 Digit untuk Jam 0-23
+                    # 2. Logika konversi Sandi 4 Digit untuk 3 Jam (5APP)
                     if kolom_csv == 'pressure_3h_diff_mb_ppp' and 'encoded_synop' in df_bulan_ini.columns:
-                        def to_sandi_4d_int(row):
+                        def to_sandi_3h_4d_int(row):
                             val = row['pressure_3h_diff_mb_ppp']
                             if pd.isna(val): return np.nan
                             synop = row['encoded_synop']
@@ -182,17 +191,47 @@ if uploaded_file is not None:
                                 tokens = re.findall(r'\b5\d{4}\b', section1)
                                 for token in tokens:
                                     if token.endswith(expected_ppp):
-                                        return int(token[1:]) # Buang angka 5 di depan
+                                        return int(token[1:]) 
                                 for a in range(10):
                                     candidate = f"5{a}{expected_ppp}"
                                     if candidate in section1:
                                         return int(candidate[1:])
-                            # Fallback otomatis berdasarkan tanda negatif/positif jika synop kosong
                             a_code = "3" if val >= 0 else "8"
                             return int(f"{a_code}{int(round(abs(val) * 10)):03d}")
                         
-                        df_bulan_ini['sandi_5app'] = df_bulan_ini.apply(to_sandi_4d_int, axis=1)
+                        df_bulan_ini['sandi_5app'] = df_bulan_ini.apply(to_sandi_3h_4d_int, axis=1)
                         pivot = df_bulan_ini.pivot_table(index='Tanggal', columns='Jam', values='sandi_5app', aggfunc='first')
+                        
+                    # 3. <-- BARU: Logika konversi Sandi 3 Digit Baru untuk 24 Jam (58/59P24)
+                    elif kolom_csv == 'pressure_24h_diff_mb_p24' and 'encoded_synop' in df_bulan_ini.columns:
+                        def to_sandi_24h_3d_int(row):
+                            val = row['pressure_24h_diff_mb_p24']
+                            if pd.isna(val): return np.nan
+                            synop = row['encoded_synop']
+                            if pd.notna(synop):
+                                expected_p24 = f"{int(round(abs(val) * 10)):03d}"
+                                if '333' in synop:
+                                    section3 = synop.split('333')[1]
+                                    tokens = re.findall(r'\b5[89]\d{3}\b', section3)
+                                    for token in tokens:
+                                        if token.endswith(expected_p24):
+                                            if token.startswith('58'):
+                                                return int(token[2:])  # 58007 -> 7 (nanti Excel cetak 007)
+                                            elif token.startswith('59'):
+                                                return 500 + int(token[2:])  # 59002 -> 502
+                                    for prefix in ['58', '59']:
+                                        candidate = f"{prefix}{expected_p24}"
+                                        if candidate in section3:
+                                            if prefix == '58':
+                                                return int(candidate[2:])
+                                            else:
+                                                return 500 + int(candidate[2:])
+                            # Fallback matematika jika text synop kosong
+                            ppp_val = int(round(abs(val) * 10))
+                            return ppp_val if val >= 0 else (500 + ppp_val)
+                        
+                        df_bulan_ini['sandi_p24'] = df_bulan_ini.apply(to_sandi_24h_3d_int, axis=1)
+                        pivot = df_bulan_ini.pivot_table(index='Tanggal', columns='Jam', values='sandi_p24', aggfunc='first')
                     else:
                         df_bulan_ini.loc[:, kolom_csv] = pd.to_numeric(df_bulan_ini[kolom_csv], errors='coerce')
                         pivot = df_bulan_ini.pivot_table(index='Tanggal', columns='Jam', values=kolom_csv, aggfunc='first')
@@ -236,12 +275,12 @@ if uploaded_file is not None:
                     for tgl in semua_tanggal:
                         ws.write(row_idx, 0, tgl, fmt_header)
                         
-                        # Data 0-23 (Menampilkan Sandi 4 Digit)
+                        # Data 0-23
                         for h in range(24):
                             val, fmt = get_cell(pivot.loc[tgl, h], judul_param, '0-23')
                             ws.write(row_idx, h + 1, val, fmt)
                         
-                        # Data RATA 2 (Menampilkan Angka Desimal Riil Rata-rata)
+                        # Data RATA 2
                         val_rata, fmt_rata = get_cell(rata_harian.loc[tgl], judul_param, 'RATA2')
                         ws.write(row_idx, 25, val_rata, fmt_rata)
                         
