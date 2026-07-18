@@ -15,7 +15,7 @@ with st.expander("ℹ️ Klik di sini untuk melihat Petunjuk Penggunaan"):
     - Harus mengandung kolom `encoded_synop` untuk ekstraksi grup sandi tekanan.
     """)
 
-# --- FUNGSI UTAMA KALKULASI PARAMS ---
+# --- FUNGSI UTAMA KALKULASI PARAMS MATRIKS ---
 def hitung_tekanan_uap_excel(suhu, rh):
     if pd.isna(suhu) or pd.isna(rh): return np.nan
     es = 6.112 * np.exp((17.67 * suhu) / (suhu + 243.5))
@@ -106,7 +106,6 @@ if uploaded_file is not None:
             wb = writer.book
             ws = wb.add_worksheet('MATRIKS')
             
-            # Formats
             fmt_teks = wb.add_format({'bold': True, 'align': 'left'})
             fmt_judul = wb.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'font_size': 12})
             fmt_header = wb.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#D9D9D9'})
@@ -227,24 +226,22 @@ if uploaded_file is not None:
                     start_row = row_idx + 3
 
         # =====================================================================
-        # 2. GENERATOR FORMULIR ME45 BEAUTIFIED + AUTO-FILTER
+        # 2. GENERATOR FORMULIR ME45 DENGAN ATURAN SANDI BARU + AUTO-FILTER
         # =====================================================================
         buffer_me45 = io.BytesIO()
         
-        # Buat Kerangka Dasar Tanggal x Jam (1-31 Bulan Ini x 24 Jam Berurutan)
+        # Kerangka Waktu Dasar
         me45_rows = []
         station_id = int(df_raw['station_name'].iloc[0]) if ('station_name' in df_raw.columns and str(df_raw['station_name'].iloc[0]).isdigit()) else 97340
-        station_label = "STASIUN METEOROLOGI"
+        station_label = "Stasiun Meteorologi Umbu Mehang Kunda"
         
         for d in range(1, jml_hari + 1):
             for h in range(24):
                 me45_rows.append({'NoSta': station_id, 'Station': station_label, 'YY': tahun_val, 'MM': bulan_val, 'DD': d, 'HH': h})
         df_me45_final = pd.DataFrame(me45_rows)
         
-        # Gabungkan data mentah dengan kerangka dasar waktu
         df_merge = pd.merge(df_me45_final, df_bulan_ini, left_on=['DD', 'HH'], right_on=['Tanggal', 'Jam'], how='left')
         
-        # --- PROSES VECTORIZED MAPPING MAKSIMAL KE KOLOM ME45 ---
         df_out = pd.DataFrame()
         df_out['NoSta'] = df_merge['NoSta']
         df_out['Station'] = df_merge['Station']
@@ -253,12 +250,18 @@ if uploaded_file is not None:
         df_out['DD'] = df_merge['DD']
         df_out['HH'] = df_merge['HH']
         
-        # Parameter Int x10 & Direct Mapping
         df_out['TdTdTd'] = (df_merge['temp_dewpoint_c_tdtdtd'] * 10).round().fillna(np.nan)
         df_out['N'] = df_merge['cloud_cover_oktas_m'].fillna(np.nan)
-        df_out['dd'] = df_merge['wind_dir_deg_dd'].fillna(np.nan)
-        df_out['ff'] = df_merge['wind_speed_ff'].fillna(np.nan)
-        df_out['VV'] = df_merge['visibility_vv'].fillna(np.nan)
+        
+        # 1. ATURAN BARU dd: derajat dibagi 10
+        df_out['dd'] = (df_merge['wind_dir_deg_dd'] / 10).round().fillna(np.nan)
+        
+        # 2. ATURAN BARU ff: knot dibulatkan biasa (Excel format 2-digit)
+        df_out['ff'] = df_merge['wind_speed_ff'].round().fillna(np.nan)
+        
+        # 3. ATURAN BARU VV: visibility riil (km) ditambah 50
+        df_out['VV'] = (df_merge['visibility_vv'] + 50).round().fillna(np.nan)
+        
         df_out['ww'] = df_merge['present_weather_ww'].fillna(np.nan)
         df_out['W1'] = df_merge['past_weather_w1'].fillna(np.nan)
         df_out['W2'] = df_merge['past_weather_w2'].fillna(np.nan)
@@ -266,11 +269,10 @@ if uploaded_file is not None:
         df_out['TtTtTt'] = (df_merge['temp_drybulb_c_tttttt'] * 10).round().fillna(np.nan)
         df_out['Nh'] = df_merge['cloud_low_cover_oktas'].fillna(np.nan)
         df_out['CL'] = df_merge['cloud_low_type_cl'].fillna(np.nan)
-        df_out['h'] = df_merge['cloud_low_base_1'].fillna(np.nan)  # Dasar awan jika ada
+        df_out['h'] = df_merge['cloud_low_base_1'].fillna(np.nan)  
         df_out['CM'] = df_merge['cloud_med_type_cm'].fillna(np.nan)
         df_out['CH'] = df_merge['cloud_high_type_ch'].fillna(np.nan)
         
-        # Kolom kosong untuk menyesuaikan struktur template standard 
         for blank_c in ['Ns', 'C', 'hshs', 'Ns.1', 'C.1', 'hshs.1', 0, 'C.2', 'hshs.2', 'C.3', 'D', 'e']:
             df_out[blank_c] = np.nan
             
@@ -281,77 +283,71 @@ if uploaded_file is not None:
         df_out['tR'] = df_merge['rainfall_indicator_ir'].fillna(np.nan)
         df_out['TxTxTx'] = (df_merge['temp_max_c_txtxtx'] * 10).round().fillna(np.nan)
         df_out['TnTnTn'] = (df_merge['temp_min_c_tntntn'] * 10).round().fillna(np.nan)
+        
+        # 4. ATURAN BARU EEE: dikali 10
         df_out['EEE'] = (df_merge['evaporation_24hours_mm_eee'] * 10).round().fillna(np.nan)
         df_out['F24F24F24F24'] = np.nan
+        
+        # 5. ATURAN BARU SSS: dikali 10
         df_out['SSS'] = (df_merge['sunshine_h_sss'] * 10).round().fillna(np.nan)
+        
         df_out['E'] = df_merge['land_cond'].fillna(np.nan)
         
-        # Kolom kosong pelengkap sebelum grup sandi tekanan
         for blank_c2 in ['DL', 'DM', 'DH']:
             df_out[blank_c2] = np.nan
             
-        # Pemuatan Sandi Tekanan Khusus yang di-extract cerdas dari text SYNOP
         df_out['appp'] = df_merge.apply(ext_appp, axis=1)
         df_out['P24P24P24'] = df_merge.apply(ext_p24, axis=1)
-        
-        # Indikator Tambahan Akhir
         df_out['iW'] = df_merge['wind_indicator_iw'].fillna(np.nan)
         df_out['iX'] = df_merge['weather_indicator_ix'].fillna(np.nan)
         df_out['iR'] = df_merge['rainfall_indicator_ir'].fillna(np.nan)
         df_out['iE'] = df_merge['evaporation_eq_indicator_ie'].fillna(np.nan)
 
-        # SIMPAN DAN HIAS DESIGN SHEET EXCEL ME45
         with pd.ExcelWriter(buffer_me45, engine='xlsxwriter') as writer_me45:
             df_out.to_excel(writer_me45, sheet_name='Sheet1', index=False)
             
             wb_m = writer_me45.book
             ws_m = writer_me45.sheets['Sheet1']
             
-            # Pengaturan Gridline Excel agar Tetap Terlihat Secara Default
-            ws_m.hide_gridlines(2)
+            ws_m.hide_gridlines(2) # Menjaga agar gridlines bawaan tetap aktif visualnya
             
-            # --- PALET DECORATION FORMATS ---
-            # Header: Deep Navy Background, Bold White Text
+            # --- TEMA STYLE BLANKO ME45 (Deep Navy Professional) ---
             fmt_header_me45 = wb_m.add_format({
                 'bold': True, 'font_color': '#FFFFFF', 'bg_color': '#1F4E78',
                 'border': 1, 'border_color': '#D9D9D9', 'align': 'center', 'valign': 'vcenter'
             })
-            
-            # Isi Data Standar: Rata Tengah dengan Garis Batas Abu-abu Tipis
             fmt_data_me45 = wb_m.add_format({
                 'align': 'center', 'valign': 'vcenter', 'border': 1, 'border_color': '#E0E0E0'
             })
             
-            # Format Angka Ber-Leading Zero Proteksi (3 & 4 Digit)
-            fmt_3d = wb_m.add_format({'num_format': '000', 'align': 'center', 'valign': 'vcenter', 'border': 1, 'border_color': '#E0E0E0'})
-            fmt_4d = wb_m.add_format({'num_format': '0000', 'align': 'center', 'valign': 'vcenter', 'border': 1, 'border_color': '#E0E0E0'})
+            # Formats Penjaga Angka 0 Di Depan (Leading Zero Protection)
+            fmt_2dig = wb_m.add_format({'num_format': '00', 'align': 'center', 'valign': 'vcenter', 'border': 1, 'border_color': '#E0E0E0'})
+            fmt_3dig = wb_m.add_format({'num_format': '000', 'align': 'center', 'valign': 'vcenter', 'border': 1, 'border_color': '#E0E0E0'})
+            fmt_4dig = wb_m.add_format({'num_format': '0000', 'align': 'center', 'valign': 'vcenter', 'border': 1, 'border_color': '#E0E0E0'})
             
-            # Tulis ulang Header dengan Format Baru yang Elegan
             for col_num, value in enumerate(df_out.columns.values):
                 ws_m.write(0, col_num, value, fmt_header_me45)
                 
-            # Set Lebar Kolom Otomatis & Pasang Format Standar Seluruh Baris
-            ws_m.set_row(0, 26)  # Mengatur row header sedikit lebih tinggi
+            ws_m.set_row(0, 26)
             ws_m.set_column(0, len(df_out.columns) - 1, 9, fmt_data_me45)
             
-            # Tempelkan Format leading zero di kolom spesifik sandi tekanan 3 jam & 24 jam
-            idx_qff = df_out.columns.get_loc('QFF')
-            idx_qfe = df_out.columns.get_loc('QFE')
-            idx_appp = df_out.columns.get_loc('appp')
-            idx_p24 = df_out.columns.get_loc('P24P24P24')
+            # --- PENERAPAN FORMAT KUSTOM JAM PER JAM ---
+            ws_m.set_column(df_out.columns.get_loc('dd'), df_out.columns.get_loc('dd'), 9, fmt_2dig) # dd (03, 20)
+            ws_m.set_column(df_out.columns.get_loc('ff'), df_out.columns.get_loc('ff'), 9, fmt_2dig) # ff (06)
+            ws_m.set_column(df_out.columns.get_loc('VV'), df_out.columns.get_loc('VV'), 9, fmt_2dig) # VV (60, 58)
+            ws_m.set_column(df_out.columns.get_loc('EEE'), df_out.columns.get_loc('EEE'), 9, fmt_3dig) # EEE (045)
+            ws_m.set_column(df_out.columns.get_loc('SSS'), df_out.columns.get_loc('SSS'), 9, fmt_3dig) # SSS (095)
             
-            ws_m.set_column(idx_qff, idx_qff, 9, fmt_4d)
-            ws_m.set_column(idx_qfe, idx_qfe, 9, fmt_4d)
-            ws_m.set_column(idx_appp, idx_appp, 10, fmt_4d)
-            ws_m.set_column(idx_p24, idx_p24, 11, fmt_3d)
+            # Proteksi grup sandi tekanan bawaan sebelumnya
+            ws_m.set_column(df_out.columns.get_loc('QFF'), df_out.columns.get_loc('QFF'), 9, fmt_4dig)
+            ws_m.set_column(df_out.columns.get_loc('QFE'), df_out.columns.get_loc('QFE'), 9, fmt_4dig)
+            ws_m.set_column(df_out.columns.get_loc('appp'), df_out.columns.get_loc('appp'), 10, fmt_4dig)
+            ws_m.set_column(df_out.columns.get_loc('P24P24P24'), df_out.columns.get_loc('P24P24P24'), 11, fmt_3dig)
             
-            # --- AKTIFKAN FITUR UTAMA FILTER OTOMATIS EXCEL ---
+            # Aktifkan Filter Otomatis Excel
             ws_m.autofilter(0, 0, len(df_out), len(df_out.columns) - 1)
 
-        # =====================================================================
-        # ANTARMUKA TOMBOL UNDUH TERPISAH
-        # =====================================================================
-        st.success("🎉 Sukses! Koding diefisiensikan & Berkas ME45 Siap Diunduh.")
+        st.success("🎉 Berhasil! Seluruh konversi aturan digit BMKG telah diperbarui.")
         
         col1, col2 = st.columns(2)
         with col1:
@@ -364,7 +360,7 @@ if uploaded_file is not None:
             )
         with col2:
             st.download_button(
-                label=f"📥 2. Unduh Berkas ME45 Beautified + Filter ({bulan_dipilih})",
+                label=f"📥 2. Unduh Berkas ME45 Ber-Filter ({bulan_dipilih})",
                 data=buffer_me45.getvalue(),
                 file_name=f"ME45_Standard_{bulan_dipilih}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
