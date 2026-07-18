@@ -42,8 +42,8 @@ parameter_mapping = {
     'relative_humidity_pc': 'KELEMBABAN UDARA RATA-2 HARIAN',
     'wind_speed_ff': 'KECEPATAN ANGIN RATA-2 HARIAN',
     'Tekanan_Uap_x10': 'TEKANAN UAP AIR RATA-2 HARIAN',
-    # <-- TAMBAHAN UNTUK 5APP / CURAH HUJAN (Sesuaikan nama kolom CSV jika berbeda)
-    'precipitation_amount_5app_mm_derived': 'CURAH HUJAN (5APP) TOTAL HARIAN' 
+    # <-- DI SINI PERUBAHANNYA: MENAMBAHKAN PARAMETER 5APP
+    'pressure_3h_diff_mb_ppp': 'PERUBAHAN TEKANAN 3 JAM (5APP) RATA-2 HARIAN'
 }
 
 uploaded_file = st.file_uploader("Unggah file...", type=["csv"])
@@ -120,13 +120,6 @@ if uploaded_file is not None:
                 if pd.isna(val): 
                     return "", (fmt_blank_rata2 if col_type == 'RATA2' else fmt_blank)
                 
-                # <-- TAMBAHAN UNTUK 5APP / CURAH HUJAN (Jika 0 atau NaN dibuat blank/kosong agar rapi)
-                if 'CURAH HUJAN' in param:
-                    v_rain = float(val)
-                    if v_rain == 0:
-                        return "", (fmt_blank_rata2 if col_type == 'RATA2' else fmt_blank)
-                    return round(v_rain, 1), (fmt_float_rata2 if col_type == 'RATA2' else fmt_float_biasa)
-
                 # KECEPATAN ANGIN
                 if 'KECEPATAN ANGIN' in param:
                     v = int(round(float(val)))
@@ -137,7 +130,7 @@ if uploaded_file is not None:
                 # QFF / QFE / SUHU UDARA / DEWPOINT (0-23)
                 if 'QFF' in param or 'QFE' in param or 'SUHU' in param:
                     if col_type == '0-23':
-                        if 'SUHU' in param:
+                        if 'SUHU' in param: # Ini juga mencakup "SUHU TITIK EMBUN (TD)"
                             return int(round(float(val) * 10)), fmt_int_biasa
                         
                         return (int(round(float(val) * 10)) % 10000), fmt_qff_biasa
@@ -164,23 +157,12 @@ if uploaded_file is not None:
                     pivot = pivot[list(range(24))]
                     pivot = pivot.reindex(semua_tanggal)
                     
-                    # <-- TAMBAHAN UNTUK 5APP / CURAH HUJAN (Menggunakan SUM/Total Harian, bukan MEAN/Rata-rata)
-                    if 'CURAH HUJAN' in judul_param:
-                        rata_harian = pivot.apply(lambda r: np.nan if r.isna().all() else r.sum(), axis=1)
-                    else:
-                        rata_harian = pivot.mean(axis=1)
-                        if 'UAP AIR' in judul_param: rata_harian = rata_harian / 10
+                    rata_harian = pivot.mean(axis=1)
+                    if 'UAP AIR' in judul_param: rata_harian = rata_harian / 10
 
                     if 'UAP AIR' in judul_param:
                         extra_headers = []
                         summary_labels = []
-                    # <-- TAMBAHAN UNTUK 5APP / CURAH HUJAN (Summary bawah berupa Total Bulanan & Max Harian)
-                    elif 'CURAH HUJAN' in judul_param:
-                        extra_headers = []
-                        summary_labels = [
-                            ("TOTAL CURAH HUJAN BULAN INI", rata_harian.sum(skipna=True)),
-                            ("HIGHEST / CH MAKSIMUM HARIAN", rata_harian.max())
-                        ]
                     elif 'KECEPATAN ANGIN' in judul_param:
                         extra_headers = ['MAX HARIAN']
                         daily_max_angin = pivot.max(axis=1)
@@ -201,10 +183,7 @@ if uploaded_file is not None:
                     
                     ws.write(start_row + 2, 0, "NO.", fmt_header)
                     for i in range(24): ws.write(start_row + 2, i + 1, str(i), fmt_header)
-                    
-                    # Mengubah label kolom ke-25 jika parameter adalah Curah Hujan
-                    label_kolom_25 = "T O T A L" if 'CURAH HUJAN' in judul_param else "R A T A   2"
-                    ws.write(start_row + 2, 25, label_kolom_25, fmt_header)
+                    ws.write(start_row + 2, 25, "R A T A   2", fmt_header)
                     
                     for c_i, ext_hdr in enumerate(extra_headers):
                         ws.write(start_row + 2, 26 + c_i, ext_hdr, fmt_header)
@@ -220,20 +199,19 @@ if uploaded_file is not None:
                             val, fmt = get_cell(pivot.loc[tgl, h], judul_param, '0-23')
                             ws.write(row_idx, h + 1, val, fmt)
                         
-                        # Data RATA 2 / TOTAL HARIAN
+                        # Data RATA 2
                         val_rata, fmt_rata = get_cell(rata_harian.loc[tgl], judul_param, 'RATA2')
                         ws.write(row_idx, 25, val_rata, fmt_rata)
                         
                         # Data Tambahan Kanan
-                        # <-- TAMBAHAN UNTUK 5APP / CURAH HUJAN (Dilewati karena tidak pakai kolom tambahan kanan)
-                        if 'UAP AIR' in judul_param or 'CURAH HUJAN' in judul_param:
+                        if 'UAP AIR' in judul_param:
                             pass
                         elif 'KECEPATAN ANGIN' in judul_param:
                             v_max = daily_max_angin.loc[tgl]
                             if pd.isna(v_max) or float(v_max) == 0:
                                 ws.write(row_idx, 26, "", fmt_blank)
                             else:
-                                ws.write(row_idx, 26, int(round(float(v_max))), fmt_int_biasa)
+                                ws.write(row_idx, 26, int(round(float(v_max))), fmt_int_biasa) # NUMBER
                         else:
                             for c_idx, h_spec in zip([26, 27, 28], [23, 5, 10]):
                                 val_s, fmt_s = get_cell(pivot.loc[tgl, h_spec], judul_param, 'SPEC')
@@ -253,9 +231,9 @@ if uploaded_file is not None:
                                 if v_ang == 0:
                                     ws.write(row_idx, 25, "", fmt_summary_final_blank)
                                 else:
-                                    ws.write(row_idx, 25, v_ang, fmt_summary_final_int)
+                                    ws.write(row_idx, 25, v_ang, fmt_summary_final_int) # NUMBER
                             else:
-                                ws.write(row_idx, 25, round(float(final_val), 1), fmt_summary_final_float)
+                                ws.write(row_idx, 25, round(float(final_val), 1), fmt_summary_final_float) # NUMBER
                         
                         for c_i in range(len(extra_headers)):
                             ws.write(row_idx, 26 + c_i, "", fmt_summary_kosong)
