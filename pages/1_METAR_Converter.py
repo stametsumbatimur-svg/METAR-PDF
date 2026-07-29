@@ -235,7 +235,7 @@ def generate_pdf_bytes_wxrev(df_clean, logo_path):
         Paragraph("<b>BADAN METEOROLOGI KLIMATOLOGI DAN GEOFISIKA</b>", header_title_style),
         Paragraph(f"<b>{station_name}</b>", header_title_style),
         Paragraph("Alamat : JL.ADI SUCIPTO NO.3 | Telp. (0387)61227 | Email : stamet.waingapu@gmail.com", header_sub_style),
-        Paragraph("KOORDINAT : 09°40'10\" 120°17'59\" | TINGGI DIATAS PERMUKAAN LAUT : 10 m", header_sub_style)
+        #Paragraph("KOORDINAT : 09°40'10\" 120°17'59\" | TINGGI DIATAS PERMUKAAN LAUT : 10 m", header_sub_style)
     ]
     
     total_width = 545  # Lebar area cetak A4
