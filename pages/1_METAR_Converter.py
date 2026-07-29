@@ -219,47 +219,48 @@ def parse_wxrev(sandi_str):
 
 def generate_pdf_bytes_wxrev(df_clean, logo_path):
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=25, leftMargin=35, topMargin=25, bottomMargin=25)
+    # Margin diperkecil agar muat 1 halaman A4 dengan rapi
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=25, leftMargin=25, topMargin=20, bottomMargin=20)
     story = []
     
     styles = getSampleStyleSheet()
-    header_style = ParagraphStyle('HeaderStyle', fontName='Helvetica', fontSize=10, leading=14)
-    center_title_style = ParagraphStyle('CenterTitle', fontName='Helvetica-Bold', fontSize=12, leading=16, alignment=1)
+    header_title_style = ParagraphStyle('HeaderTitle', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=10, leading=13, alignment=1)
+    header_sub_style = ParagraphStyle('HeaderSub', parent=styles['Normal'], fontName='Helvetica', fontSize=8, leading=11, alignment=1)
+    center_title_style = ParagraphStyle('CenterTitle', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=11, leading=15, alignment=1)
     
-    station_name = df_clean['station_name'].iloc[0].title() if 'station_name' in df_clean.columns else "Stasiun Meteorologi"
+    station_name = df_clean['station_name'].iloc[0].upper() if 'station_name' in df_clean.columns else "STASIUN METEOROLOGI"
     
-    header_left = f"""
-    <b>BADAN METEOROLOGI KLIMATOLOGI DAN GEOFISIKA</b><br/>
-    <b>{station_name}</b><br/>
-    Alamat : JL.ADI SUCIPTO NO.3<br/>
-    Telp. (0387)61227  (0387)61227<br/>
-    Email : stamet.waingapu@gmail.com
-    """
+    # Text Block Header Center
+    text_block = [
+        Paragraph("<b>BADAN METEOROLOGI KLIMATOLOGI DAN GEOFISIKA</b>", header_title_style),
+        Paragraph(f"<b>{station_name}</b>", header_title_style),
+        Paragraph("Alamat : JL.ADI SUCIPTO NO.3 | Telp. (0387)61227 | Email : stamet.waingapu@gmail.com", header_sub_style),
+        Paragraph("KOORDINAT : 09°40'10\" 120°17'59\" | TINGGI DIATAS PERMUKAAN LAUT : 10 m", header_sub_style)
+    ]
     
-    header_right = """
-    KOORDINAT : 09°40'10" 120°17'59"<br/>
-    TINGGI DIATAS PERMUKAAN LAUT : 10 m
-    """
-    
-    p_left = Paragraph(header_left, header_style)
-    p_right = Paragraph(header_right, header_style)
-    
+    total_width = 545  # Lebar area cetak A4
     if logo_path and os.path.exists(logo_path):
-        logo_img = Image(logo_path, width=60, height=60)
-        header_table = Table([[logo_img, p_left, p_right]], colWidths=[70, 270, 195])
+        logo_img = Image(logo_path, width=48, height=48)
+        header_table = Table([[logo_img, text_block, ""]], colWidths=[50, 445, 50])
         header_table.setStyle(TableStyle([
-            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'), ('ALIGN', (0,0), (0,0), 'CENTER'),
-            ('LINEBELOW', (0,0), (-1,-1), 1.5, colors.black), ('BOTTOMPADDING', (0,0), (-1,-1), 10),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('ALIGN', (0,0), (0,0), 'CENTER'),
+            ('ALIGN', (1,0), (1,0), 'CENTER'),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+            ('TOPPADDING', (0,0), (-1,-1), 0),
+            ('LINEBELOW', (0,0), (-1,-1), 1.2, colors.black),
         ]))
     else:
-        header_table = Table([[p_left, p_right]], colWidths=[340, 195])
+        header_table = Table([[text_block]], colWidths=[total_width])
         header_table.setStyle(TableStyle([
-            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'), ('LINEBELOW', (0,0), (-1,-1), 1.5, colors.black),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 10),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+            ('LINEBELOW', (0,0), (-1,-1), 1.2, colors.black),
         ]))
         
     story.append(header_table)
-    story.append(Spacer(1, 15))
+    story.append(Spacer(1, 8))
     
     # Title & Month/Year
     dt_first = df_clean['datetime'].iloc[0] if not df_clean.empty else datetime.now()
@@ -268,7 +269,7 @@ def generate_pdf_bytes_wxrev(df_clean, logo_path):
     
     story.append(Paragraph("<b>KUMPULAN BERITA WXREV</b>", center_title_style))
     story.append(Paragraph(f"<b>{bulan_str} {tahun_str}</b>", center_title_style))
-    story.append(Spacer(1, 15))
+    story.append(Spacer(1, 8))
     
     # Data Table
     headers = ['TGL', 'MMYYGp', 'IIiii', 'atTxTxTnTn', 'apPxPxPnPn', 'auUxUxUnUn', 'arRRRR', 'rDrDdfmfm', 'rDrDdfmfm']
@@ -282,33 +283,23 @@ def generate_pdf_bytes_wxrev(df_clean, logo_path):
         ])
         
     base_table_style = [
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'), ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'), ('FONTSIZE', (0, 0), (-1, -1), 9),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4), ('TOPPADDING', (0, 0), (-1, -1), 4),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.black), ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),  # Padding rapat agar pas 1 halaman
+        ('TOPPADDING', (0, 0), (-1, -1), 2),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
     ]
     
-    col_widths = [30, 50, 45, 70, 70, 70, 55, 65, 65]
+    col_widths = [32, 55, 48, 72, 72, 72, 58, 68, 68]
     wx_table = Table(table_data, colWidths=col_widths)
     wx_table.setStyle(TableStyle(base_table_style))
     story.append(wx_table)
     
-    story.append(Spacer(1, 30))
-    
-    # Footer - Aplikasi Synoptic & Tanda Tangan
-    now = datetime.now()
-    loc_name = "WAINGAPU" if "waingapu" in station_name.lower() or "mehang" in station_name.lower() else station_name.split()[0].upper()
-    sign_date_str = f"{now.day:02d} {BULAN_INDO.get(now.month, '').capitalize()} {now.year}"
-    
-    footer_left = f"Aplikasi Synoptic v.5.0<br/>{now.strftime('%d/%m/%Y %H:%M:%S')}"
-    footer_right = f"{loc_name}, {sign_date_str}<br/><br/><br/><br/>NIP :"
-    
-    footer_table = Table([
-        [Paragraph(footer_left, ParagraphStyle('FL', fontName='Helvetica', fontSize=9, leading=12)),
-         Paragraph(footer_right, ParagraphStyle('FR', fontName='Helvetica', fontSize=10, leading=12, alignment=1))]
-    ], colWidths=[260, 260])
-    
-    story.append(footer_table)
+    # Tanpa Footer
     doc.build(story)
     buffer.seek(0)
     return buffer
