@@ -13,8 +13,7 @@ Silakan pilih menu di **Sidebar sebelah kiri** untuk mulai menggunakan aplikasi:
 1. **METAR Converter** ✈️ 
    
 2. **Klimat Average** 📊
-   
-3. **Histori Pilot** 🎈
+
    
 
 ---
