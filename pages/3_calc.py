@@ -20,16 +20,30 @@ elevation_waingapu = 32.8
 # --- LOAD DATASET HISTORIS UMBU MEHANG KUNDA ---
 @st.cache_data
 def load_historical_pibal():
-    # Perbaikan path agar file dapat ditemukan baik di root maupun folder pages
-    filename = 'Raw Pibal 2024-01-01 to 2026-07-21.csv'
-    if not os.path.exists(filename):
-        filename = os.path.join(os.path.dirname(__file__), '..', 'Raw Pibal 2024-01-01 to 2026-07-21.csv')
-        
+    target_filename = 'Raw Pibal 2024-01-01 to 2026-07-21.csv'
+    
+    # Daftar kandidat lokasi pencarian file
+    possible_paths = [
+        target_filename,                                                # Folder kerja utama
+        os.path.join(os.path.dirname(__file__), '..', target_filename), # Root dari folder pages/
+        os.path.join(os.path.dirname(__file__), target_filename),      # Didalam folder pages/
+    ]
+    
+    final_path = None
+    for path in possible_paths:
+        if os.path.exists(path):
+            final_path = path
+            break
+            
+    if not final_path:
+        st.warning(f"⚠️ File dataset historis (`{target_filename}`) belum ada di repositori GitHub.")
+        return None
+
     try:
-        with open(filename, 'r') as f:
+        with open(final_path, 'r') as f:
             first_line = f.readline()
         skip = 1 if 'Raw Pibal' in first_line else 0
-        df = pd.read_csv(filename, skiprows=skip)
+        df = pd.read_csv(final_path, skiprows=skip)
         
         # Pembersihan Data Mentah
         df = df.dropna(subset=['azimuth', 'elevasi']).copy()
@@ -44,7 +58,7 @@ def load_historical_pibal():
         df['month'] = df['datetime'].dt.month
         return df
     except Exception as e:
-        st.warning(f"File dataset historis tidak ditemukan atau gagal dibaca. Detail: {e}")
+        st.warning(f"Gagal membaca file dataset historis. Detail: {e}")
         return None
 
 df_historical = load_historical_pibal()
