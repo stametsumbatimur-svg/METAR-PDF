@@ -161,7 +161,7 @@ def run_generation_core(target_readings, surf_ddd, surf_ff, month_idx, fresh=Fal
 
     rate_ft_min = 600.0
     max_allowed_speed_kt = 35.0  # Batas maksimum kecepatan angin per layer
-    max_step_change_kt = 6.0     # Batas perubahan kecepatan maksimum per layer (mencegah zig-zag)
+    max_step_change_kt = 3.5     # Batas perubahan kecepatan maksimum per layer (mencegah zig-zag)
     
     curr_x, curr_y = 0.0, 0.0
     
@@ -216,7 +216,7 @@ def run_generation_core(target_readings, surf_ddd, surf_ff, month_idx, fresh=Fal
             v_raw = (dy_raw / dt) / 1.68781
             
             # 2. FILTER SMOOTHING (Low-Pass Filter)
-            alpha = 0.35  # Bobot smoothing (35% data baru + 65% tren sebelumnya)
+            alpha = 0.25  # Bobot smoothing (35% data baru + 65% tren sebelumnya)
             u_smooth = alpha * u_raw + (1 - alpha) * prev_u
             v_smooth = alpha * v_raw + (1 - alpha) * prev_v
             
