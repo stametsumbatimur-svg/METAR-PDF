@@ -11,9 +11,11 @@ st.markdown("""
 Silakan pilih menu di **Sidebar sebelah kiri** untuk mulai menggunakan aplikasi:
 
 1. **METAR Converter** ✈️ 
-   *Gunakan ini untuk mengekstrak dan merapikan sandi METAR ke format PDF atau Excel.*
+   
 2. **Klimat Average** 📊
-   *Gunakan ini untuk menghitung rata-rata harian (suhu, RH, QFF, QFE, dll) dan mengekspor matriks Excel.*
+   
+3. **Histori Pilot** 🎈
+   
 
 ---
 *Catatan: Pastikan format file Anda adalah CSV (.csv).*
