@@ -129,8 +129,7 @@ def find_best_historical_match(input_ddd, input_ff, input_month, df):
     
     return best_obs['data_timestamp'], best_obs['datetime'], best_obs['wind_dir_surface'], best_obs['wind_speed_surface']
 
-# --- FUNGSI CORE GENERATOR DATA DENGAN SANITASI FISIKA AZIMUT/ELEVASI ---
-# --- FUNGSI CORE GENERATOR DATA DENGAN SANITASI FISIKA AZIMUT/ELEVASI ---
+# --- FUNGSI CORE GENERATOR DATA DENGAN SMOOTHING & SANITASI FISIKA ---
 def run_generation_core(target_readings, surf_ddd, surf_ff, month_idx, fresh=False):
     if fresh or not st.session_state.generated_records:
         st.session_state.generated_records = []
@@ -161,17 +160,23 @@ def run_generation_core(target_readings, surf_ddd, surf_ff, month_idx, fresh=Fal
     hist_dict = {r['pembacaan']: r for r in hist_rows}
 
     rate_ft_min = 600.0
-    max_allowed_speed_kt = 35.0  # Batas fisika kecepatan angin maksimum
+    max_allowed_speed_kt = 35.0  # Batas maksimum kecepatan angin per layer
+    max_step_change_kt = 6.0     # Batas perubahan kecepatan maksimum per layer (mencegah zig-zag)
     
-    prev_x, prev_y = 0.0, 0.0
-    raw_prev_x, raw_prev_y = 0.0, 0.0
+    curr_x, curr_y = 0.0, 0.0
+    
+    # Komponen angin permukaan
+    u_surf = -surf_ff * math.sin(math.radians(surf_ddd))
+    v_surf = -surf_ff * math.cos(math.radians(surf_ddd))
+    
+    prev_u, prev_v = u_surf, v_surf
 
     for idx in range(1, target_readings + 1):
         target_level = math.ceil((idx - 1) / 2) * 1000 if idx > 1 else 0
         level_target_str = "Diabaikan (Rilis)" if idx == 1 else f"Level {target_level} ft"
         height_above_stn = 100.0 if idx == 1 else (idx - 1) * 500.0
         
-        # Ambil nilai azimut & elevasi raw
+        # 1. Ambil nilai azimut & elevasi mentah
         if idx <= len(st.session_state.generated_records):
             existing_rec = st.session_state.generated_records[idx - 1]
             raw_az = float(existing_rec["AZIMUT"])
@@ -189,57 +194,65 @@ def run_generation_core(target_readings, surf_ddd, surf_ff, month_idx, fresh=Fal
                 raw_az = (surf_ddd + random.uniform(-5, 5)) % 360
                 raw_el = max(5.0, 45.0 - idx * 1.2)
 
-        # Hitung posisi horizontal raw
-        safe_el = max(0.5, min(89.0, raw_el))
-        d_raw = height_above_stn / math.tan(math.radians(safe_el))
-        x_raw = d_raw * math.sin(math.radians(raw_az))
-        y_raw = d_raw * math.cos(math.radians(raw_az))
-
         if idx == 1:
             clean_az, clean_el = raw_az, raw_el
-            x, y = 0.0, 0.0
-            u_comp = -surf_ff * math.sin(math.radians(surf_ddd))
-            v_comp = -surf_ff * math.cos(math.radians(surf_ddd))
-            raw_prev_x, raw_prev_y = 0.0, 0.0
+            curr_x, curr_y = 0.0, 0.0
+            u_comp, v_comp = u_surf, v_surf
+            prev_u, prev_v = u_surf, v_surf
         else:
             prev_h = 100.0 if idx == 2 else (idx - 2) * 500.0
             dt = ((height_above_stn - prev_h) / rate_ft_min) * 60.0
             
-            # Hitung vektor perpindahan inkremental (Delta)
-            dx_raw = x_raw - raw_prev_x
-            dy_raw = y_raw - raw_prev_y
-            dist_ft = math.hypot(dx_raw, dy_raw)
-            speed_kt = (dist_ft / dt) / 1.68781
-
-            # Sanitasi berbasis perpindahan bertahap (Smooth Vector Capping)
-            if speed_kt > max_allowed_speed_kt:
-                adj_dist_ft = max_allowed_speed_kt * 1.68781 * dt
-                move_dir = math.degrees(math.atan2(dx_raw, dy_raw)) % 360
-                dx_clean = adj_dist_ft * math.sin(math.radians(move_dir))
-                dy_clean = adj_dist_ft * math.cos(math.radians(move_dir))
-            else:
-                dx_clean = dx_raw
-                dy_clean = dy_raw
-
-            # Akumulasi posisi baru secara halus dari posisi sebelumnya
-            x = prev_x + dx_clean
-            y = prev_y + dy_clean
-
-            d = math.hypot(x, y)
-            if d > 0:
-                clean_az = math.degrees(math.atan2(x, y)) % 360
-                clean_el = math.degrees(math.atan2(height_above_stn, d))
+            # Hitung posisi target ideal dari data mentah
+            safe_el = max(0.5, min(89.0, raw_el))
+            d_raw = height_above_stn / math.tan(math.radians(safe_el))
+            x_raw_target = d_raw * math.sin(math.radians(raw_az))
+            y_raw_target = d_raw * math.cos(math.radians(raw_az))
+            
+            # Vektor kecepatan mentah per layer
+            dx_raw = x_raw_target - curr_x
+            dy_raw = y_raw_target - curr_y
+            u_raw = (dx_raw / dt) / 1.68781
+            v_raw = (dy_raw / dt) / 1.68781
+            
+            # 2. FILTER SMOOTHING (Low-Pass Filter)
+            alpha = 0.35  # Bobot smoothing (35% data baru + 65% tren sebelumnya)
+            u_smooth = alpha * u_raw + (1 - alpha) * prev_u
+            v_smooth = alpha * v_raw + (1 - alpha) * prev_v
+            
+            # 3. BATASI PERUBAHAN VEKTOR BERLEBIHAN (Pencegah Zig-Zag)
+            du = u_smooth - prev_u
+            dv = v_smooth - prev_v
+            delta_spd = math.hypot(du, dv)
+            if delta_spd > max_step_change_kt:
+                scale = max_step_change_kt / delta_spd
+                u_smooth = prev_u + du * scale
+                v_smooth = prev_v + dv * scale
+            
+            # 4. BATASI KECEPATAN ANGIN MAKSIMUM PER LAYER
+            total_spd = math.hypot(u_smooth, v_smooth)
+            if total_spd > max_allowed_speed_kt:
+                scale = max_allowed_speed_kt / total_spd
+                u_smooth *= scale
+                v_smooth *= scale
+            
+            u_comp, v_comp = u_smooth, v_smooth
+            prev_u, prev_v = u_smooth, v_smooth
+            
+            # 5. RE-KALKULASI AZIMUT/ELEVASI BERSIH AGAR MATCH DENGAN TABEL & GRAPH
+            dx_clean = u_comp * 1.68781 * dt
+            dy_clean = v_comp * 1.68781 * dt
+            curr_x += dx_clean
+            curr_y += dy_clean
+            
+            d_clean = math.hypot(curr_x, curr_y)
+            if d_clean > 0:
+                clean_az = math.degrees(math.atan2(curr_x, curr_y)) % 360
+                clean_el = math.degrees(math.atan2(height_above_stn, d_clean))
             else:
                 clean_az, clean_el = raw_az, raw_el
 
-            # Komponen u, v Hodograph
-            u_comp = (dx_clean / dt) / 1.68781
-            v_comp = (dy_clean / dt) / 1.68781
-
-        raw_prev_x, raw_prev_y = x_raw, y_raw
-        prev_x, prev_y = x, y
-
-        # Simpan nilai yang telah dibersihkan
+        # Simpan hasil
         if idx >= start_loop:
             height_display = "Awal" if idx == 1 else f"{int(height_above_stn)} ft"
             st.session_state.generated_records.append({
