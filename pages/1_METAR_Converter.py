@@ -90,7 +90,8 @@ def calculate_priority(row):
 
 def generate_pdf_bytes_metar(df_clean, logo_path):
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=25, leftMargin=35, topMargin=25, bottomMargin=25)
+    # PERBAIKAN: Margin kiri dinaikkan menjadi 75 (sekitar 2.6 cm) untuk jilid. Margin kanan 20.
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=75, topMargin=25, bottomMargin=25)
     story = []
     
     styles = getSampleStyleSheet()
@@ -112,15 +113,16 @@ def generate_pdf_bytes_metar(df_clean, logo_path):
             Paragraph(f"<b>{judul_rekap}</b>", header_text_style)
         ]
         
+        # PERBAIKAN: Menyesuaikan lebar tabel header (Max ~500 points karena margin sudah diambil)
         if logo_path and os.path.exists(logo_path):
             logo_img = Image(logo_path, width=48, height=48)
-            header_table = Table([[logo_img, text_block, ""]], colWidths=[55, 452, 55])
+            header_table = Table([[logo_img, text_block, ""]], colWidths=[50, 400, 50])
             header_table.setStyle(TableStyle([
                 ('VALIGN', (0,0), (-1,-1), 'MIDDLE'), ('ALIGN', (0,0), (0,0), 'CENTER'), ('ALIGN', (1,0), (1,0), 'CENTER'),
                 ('BOTTOMPADDING', (0,0), (-1,-1), 6), ('TOPPADDING', (0,0), (-1,-1), 0), ('LINEBELOW', (0,0), (-1,-1), 1.5, colors.black),
             ]))
         else:
-            header_table = Table([[text_block]], colWidths=[562])
+            header_table = Table([[text_block]], colWidths=[500])
             header_table.setStyle(TableStyle([
                 ('VALIGN', (0,0), (-1,-1), 'MIDDLE'), ('ALIGN', (0,0), (-1,-1), 'CENTER'),
                 ('BOTTOMPADDING', (0,0), (-1,-1), 6), ('LINEBELOW', (0,0), (-1,-1), 1.5, colors.black),
@@ -147,7 +149,8 @@ def generate_pdf_bytes_metar(df_clean, logo_path):
                 row_data = [str(row[h]) for h in headers]
             table_data.append(row_data)
             
-        col_widths = [45, 40, 55, 75, 42, 40, 105, 45, 50, 65]
+        # PERBAIKAN: Menyesuaikan kolom lebar tabel agar sesuai sisa kertas (Total 490 points)
+        col_widths = [40, 35, 50, 65, 35, 35, 90, 40, 45, 55] 
         metar_table = Table(table_data, colWidths=col_widths)
         metar_table.setStyle(TableStyle(base_table_style))
         story.append(metar_table)
@@ -219,8 +222,8 @@ def parse_wxrev(sandi_str):
 
 def generate_pdf_bytes_wxrev(df_clean, logo_path):
     buffer = io.BytesIO()
-    # Margin diperkecil agar muat 1 halaman A4 dengan rapi
-    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=25, leftMargin=25, topMargin=20, bottomMargin=20)
+    # PERBAIKAN: Margin kiri untuk jilid di WXREV dinaikkan menjadi 75. Margin Kanan 20.
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=75, topMargin=20, bottomMargin=20)
     story = []
     
     styles = getSampleStyleSheet()
@@ -235,13 +238,13 @@ def generate_pdf_bytes_wxrev(df_clean, logo_path):
         Paragraph("<b>BADAN METEOROLOGI KLIMATOLOGI DAN GEOFISIKA</b>", header_title_style),
         Paragraph(f"<b>{station_name}</b>", header_title_style),
         Paragraph("Alamat : JL.ADI SUCIPTO NO.3 | Telp. (0387)61227 | Email : stamet.waingapu@gmail.com", header_sub_style),
-        #Paragraph("KOORDINAT : 09°40'10\" 120°17'59\" | TINGGI DIATAS PERMUKAAN LAUT : 10 m", header_sub_style)
     ]
     
-    total_width = 545  # Lebar area cetak A4
+    # PERBAIKAN: Menyesuaikan Max lebar
+    total_width = 500  
     if logo_path and os.path.exists(logo_path):
         logo_img = Image(logo_path, width=48, height=48)
-        header_table = Table([[logo_img, text_block, ""]], colWidths=[50, 445, 50])
+        header_table = Table([[logo_img, text_block, ""]], colWidths=[50, 400, 50])
         header_table.setStyle(TableStyle([
             ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
             ('ALIGN', (0,0), (0,0), 'CENTER'),
@@ -288,13 +291,14 @@ def generate_pdf_bytes_wxrev(df_clean, logo_path):
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
         ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
         ('FONTSIZE', (0, 0), (-1, -1), 8),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),  # Padding rapat agar pas 1 halaman
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
         ('TOPPADDING', (0, 0), (-1, -1), 2),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
         ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
     ]
     
-    col_widths = [32, 55, 48, 72, 72, 72, 58, 68, 68]
+    # PERBAIKAN: Menyesuaikan kolom lebar tabel agar fit (Total 500 points)
+    col_widths = [30, 50, 45, 66, 66, 66, 55, 61, 61]
     wx_table = Table(table_data, colWidths=col_widths)
     wx_table.setStyle(TableStyle(base_table_style))
     story.append(wx_table)
