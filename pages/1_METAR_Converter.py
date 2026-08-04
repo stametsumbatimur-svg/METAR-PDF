@@ -90,7 +90,6 @@ def calculate_priority(row):
 
 def generate_pdf_bytes_metar(df_clean, logo_path):
     buffer = io.BytesIO()
-    # PERBAIKAN: Margin kiri dinaikkan menjadi 75 (sekitar 2.6 cm) untuk jilid. Margin kanan 20.
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=75, topMargin=25, bottomMargin=25)
     story = []
     
@@ -113,13 +112,14 @@ def generate_pdf_bytes_metar(df_clean, logo_path):
             Paragraph(f"<b>{judul_rekap}</b>", header_text_style)
         ]
         
-        # PERBAIKAN: Menyesuaikan lebar tabel header (Max ~500 points karena margin sudah diambil)
+        # PERBAIKAN: Menambah lebar colWidths menjadi 430 & Menghapus padding sel
         if logo_path and os.path.exists(logo_path):
             logo_img = Image(logo_path, width=48, height=48)
-            header_table = Table([[logo_img, text_block, ""]], colWidths=[50, 400, 50])
+            header_table = Table([[logo_img, text_block, ""]], colWidths=[50, 430, 20])
             header_table.setStyle(TableStyle([
                 ('VALIGN', (0,0), (-1,-1), 'MIDDLE'), ('ALIGN', (0,0), (0,0), 'CENTER'), ('ALIGN', (1,0), (1,0), 'CENTER'),
                 ('BOTTOMPADDING', (0,0), (-1,-1), 6), ('TOPPADDING', (0,0), (-1,-1), 0), ('LINEBELOW', (0,0), (-1,-1), 1.5, colors.black),
+                ('LEFTPADDING', (1,0), (1,0), 0), ('RIGHTPADDING', (1,0), (1,0), 0) # Trik agar teks bebas ruang penuh
             ]))
         else:
             header_table = Table([[text_block]], colWidths=[500])
@@ -149,7 +149,6 @@ def generate_pdf_bytes_metar(df_clean, logo_path):
                 row_data = [str(row[h]) for h in headers]
             table_data.append(row_data)
             
-        # PERBAIKAN: Menyesuaikan kolom lebar tabel agar sesuai sisa kertas (Total 490 points)
         col_widths = [40, 35, 50, 65, 35, 35, 90, 40, 45, 55] 
         metar_table = Table(table_data, colWidths=col_widths)
         metar_table.setStyle(TableStyle(base_table_style))
@@ -205,7 +204,7 @@ def parse_wxrev(sandi_str):
     wxrev_core = sandi_str[start_idx:].strip()
     tokens = wxrev_core.split()
     
-    if len(tokens) < 7: # Minimal ada WXREV, MMYYGp, IIiii, att, app, auu, arr
+    if len(tokens) < 7: 
         return None
         
     mmyygp = tokens[1] if len(tokens) > 1 else ""
@@ -222,7 +221,6 @@ def parse_wxrev(sandi_str):
 
 def generate_pdf_bytes_wxrev(df_clean, logo_path):
     buffer = io.BytesIO()
-    # PERBAIKAN: Margin kiri untuk jilid di WXREV dinaikkan menjadi 75. Margin Kanan 20.
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=75, topMargin=20, bottomMargin=20)
     story = []
     
@@ -233,18 +231,17 @@ def generate_pdf_bytes_wxrev(df_clean, logo_path):
     
     station_name = df_clean['station_name'].iloc[0].upper() if 'station_name' in df_clean.columns else "STASIUN METEOROLOGI"
     
-    # Text Block Header Center
     text_block = [
         Paragraph("<b>BADAN METEOROLOGI KLIMATOLOGI DAN GEOFISIKA</b>", header_title_style),
         Paragraph(f"<b>{station_name}</b>", header_title_style),
         Paragraph("Alamat : JL.ADI SUCIPTO NO.3 | Telp. (0387)61227 | Email : stamet.waingapu@gmail.com", header_sub_style),
     ]
     
-    # PERBAIKAN: Menyesuaikan Max lebar
     total_width = 500  
+    # PERBAIKAN: Menambah lebar colWidths dan Menghapus padding sel 
     if logo_path and os.path.exists(logo_path):
         logo_img = Image(logo_path, width=48, height=48)
-        header_table = Table([[logo_img, text_block, ""]], colWidths=[50, 400, 50])
+        header_table = Table([[logo_img, text_block, ""]], colWidths=[50, 430, 20])
         header_table.setStyle(TableStyle([
             ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
             ('ALIGN', (0,0), (0,0), 'CENTER'),
@@ -252,6 +249,7 @@ def generate_pdf_bytes_wxrev(df_clean, logo_path):
             ('BOTTOMPADDING', (0,0), (-1,-1), 4),
             ('TOPPADDING', (0,0), (-1,-1), 0),
             ('LINEBELOW', (0,0), (-1,-1), 1.2, colors.black),
+            ('LEFTPADDING', (1,0), (1,0), 0), ('RIGHTPADDING', (1,0), (1,0), 0)
         ]))
     else:
         header_table = Table([[text_block]], colWidths=[total_width])
@@ -265,7 +263,6 @@ def generate_pdf_bytes_wxrev(df_clean, logo_path):
     story.append(header_table)
     story.append(Spacer(1, 8))
     
-    # Title & Month/Year
     dt_first = df_clean['datetime'].iloc[0] if not df_clean.empty else datetime.now()
     bulan_str = BULAN_INDO.get(dt_first.month, "").upper()
     tahun_str = dt_first.year
@@ -274,7 +271,6 @@ def generate_pdf_bytes_wxrev(df_clean, logo_path):
     story.append(Paragraph(f"<b>{bulan_str} {tahun_str}</b>", center_title_style))
     story.append(Spacer(1, 8))
     
-    # Data Table
     headers = ['TGL', 'MMYYGp', 'IIiii', 'atTxTxTnTn', 'apPxPxPnPn', 'auUxUxUnUn', 'arRRRR', 'rDrDdfmfm', 'rDrDdfmfm']
     table_data = [headers]
     
@@ -297,13 +293,11 @@ def generate_pdf_bytes_wxrev(df_clean, logo_path):
         ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
     ]
     
-    # PERBAIKAN: Menyesuaikan kolom lebar tabel agar fit (Total 500 points)
     col_widths = [30, 50, 45, 66, 66, 66, 55, 61, 61]
     wx_table = Table(table_data, colWidths=col_widths)
     wx_table.setStyle(TableStyle(base_table_style))
     story.append(wx_table)
     
-    # Tanpa Footer
     doc.build(story)
     buffer.seek(0)
     return buffer
