@@ -604,12 +604,11 @@ def generate_pdf_bytes_perawanan(df_clean, station_name, kepala_nama, kepala_nip
     df_clean['day'] = df_clean['datetime'].dt.day
     df_clean['cat'] = df_clean.apply(lambda r: get_cloud_category(r['CLOUD'], r['VIS']), axis=1)
     
-    # PERBAIKAN: Grouping per TAHUN & BULAN untuk membuat PDF PER LEMBAR PER BULAN
     grouped_month = df_clean.groupby(['year', 'month'])
     
     for count_month, ((year, month), month_group) in enumerate(grouped_month):
         if count_month > 0:
-            story.append(PageBreak()) # Pindah lembar baru setiap ganti bulan
+            story.append(PageBreak())
             
         bulan_str = BULAN_INDO[month]
         num_days = calendar.monthrange(year, month)[1]
@@ -643,13 +642,14 @@ def generate_pdf_bytes_perawanan(df_clean, station_name, kepala_nama, kepala_nip
             tot_banyak += c_banyak
             tot_semua += c_total
             
+            # PENYESUAIAN: Tampilkan tanda '-' saat nilai bernilai 0 (kosong)
             table_data.append([
                 f"{d:02d}",
-                str(c_cerah) if c_cerah > 0 else "",
-                str(c_sebagian) if c_sebagian > 0 else "",
-                str(c_berawan) if c_berawan > 0 else "",
-                str(c_banyak) if c_banyak > 0 else "",
-                str(c_total) if c_total > 0 else ""
+                str(c_cerah) if c_cerah > 0 else "-",
+                str(c_sebagian) if c_sebagian > 0 else "-",
+                str(c_berawan) if c_berawan > 0 else "-",
+                str(c_banyak) if c_banyak > 0 else "-",
+                str(c_total) if c_total > 0 else "-"
             ])
             
         table_data.append([
@@ -728,7 +728,6 @@ def generate_excel_bytes_perawanan(df_clean, station_name):
     df_clean['day'] = df_clean['datetime'].dt.day
     df_clean['cat'] = df_clean.apply(lambda r: get_cloud_category(r['CLOUD'], r['VIS']), axis=1)
     
-    # PERBAIKAN: Ekspor Excel Multi-Sheet (1 Sheet per Bulan)
     grouped_month = df_clean.groupby(['year', 'month'])
     
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
@@ -755,13 +754,14 @@ def generate_excel_bytes_perawanan(df_clean, station_name):
                 tot_banyak += c_banyak
                 tot_semua += c_total
                 
+                # PENYESUAIAN: Tampilkan tanda '-' saat nilai bernilai 0 (kosong)
                 rows_data.append({
                     'TANGGAL': f"{d:02d}",
-                    'CERAH (N=0)': c_cerah if c_cerah > 0 else "",
-                    'BERAWAN SEBAGIAN (N=1-3)': c_sebagian if c_sebagian > 0 else "",
-                    'BERAWAN (N=4-6)': c_berawan if c_berawan > 0 else "",
-                    'BERAWAN BANYAK (N=7-8)': c_banyak if c_banyak > 0 else "",
-                    'JUMLAH': c_total if c_total > 0 else ""
+                    'CERAH (N=0)': c_cerah if c_cerah > 0 else "-",
+                    'BERAWAN SEBAGIAN (N=1-3)': c_sebagian if c_sebagian > 0 else "-",
+                    'BERAWAN (N=4-6)': c_berawan if c_berawan > 0 else "-",
+                    'BERAWAN BANYAK (N=7-8)': c_banyak if c_banyak > 0 else "-",
+                    'JUMLAH': c_total if c_total > 0 else "-"
                 })
                 
             rows_data.append({
@@ -1100,7 +1100,6 @@ elif menu == "Form Perawanan Exporter":
             df_clean['raw_timestamp'] = df_clean['raw_timestamp'].str.replace(" +0000 UTC", "", regex=False)
             df_clean['datetime'] = pd.to_datetime(df_clean['raw_timestamp'])
             
-            # Filter jam genap (:00) dan hapus duplikat
             df_clean = df_clean[df_clean['datetime'].dt.minute == 0]
             df_clean['priority_score'] = df_clean.apply(calculate_priority, axis=1)
             df_clean = df_clean.sort_values(by=['datetime', 'priority_score', 'msg_id'])
@@ -1113,7 +1112,6 @@ elif menu == "Form Perawanan Exporter":
                 pdf_data = generate_pdf_bytes_perawanan(df_clean, st_nama, kp_nama, kp_nip, form_code)
                 excel_data = generate_excel_bytes_perawanan(df_clean, st_nama)
 
-                # Menghitung jumlah bulan terdeteksi
                 months_count = len(df_clean.groupby([df_clean['datetime'].dt.year, df_clean['datetime'].dt.month]))
                 dt_min = df_clean['datetime'].min()
                 dt_max = df_clean['datetime'].max()
