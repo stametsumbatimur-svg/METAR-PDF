@@ -15,7 +15,7 @@ UPLOAD_DIR = "uploads"
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
 
-LOGO_FILE = "logo_bmkg.png" 
+LOGO_FILE = "logo_bmkg.png"
 
 # --- FUNGSI DATABASE SQLITE ---
 def init_db():
@@ -37,6 +37,7 @@ conn = init_db()
 
 # --- HELPER FORMAT TANGGAL ---
 def format_tanggal_indo(tanggal_str):
+    """Mengubah 2026-07-02 menjadi 2 Juli 2026"""
     try:
         dt = datetime.strptime(tanggal_str, "%Y-%m-%d")
         bulan_indo = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"]
@@ -44,49 +45,62 @@ def format_tanggal_indo(tanggal_str):
     except:
         return tanggal_str
 
-# --- HELPER PARSING EXCEL LOGBOOK ---
+# --- PARSER EXCEL LOGBOOK (ANTI ERROR) ---
 def parse_logbook(df_log, bulan):
-    bulan_str = f"BULAN {bulan.upper()}"
-    indices = df_log[df_log[0].astype(str).str.strip().str.upper() == bulan_str].index.tolist()
+    """Membaca Logbook dengan cerdas mengabaikan baris kosong yang acak"""
+    bulan_str = f"BULAN{bulan.upper()}"
     stamet_data, posmet_data = [], []
+    state = 0 
     
-    # 1. Ekstrak Data Stamet UMK 
-    if len(indices) >= 1:
-        stamet_start = indices[0] + 3 
-        for i in range(stamet_start, len(df_log)):
-            row = df_log.iloc[i]
-            if str(row[0]).strip().upper() in ["TOTAL", "POS METEOROLOGI TAMBOLAKA", "NAMA PEGAWAI"] or str(row[0]).startswith("LAPORAN"):
-                break
-            if pd.notna(row[1]) or pd.notna(row[4]):
-                stamet_data.append(row)
-                
-    # 2. Ekstrak Data Posmet Tambolaka 
-    if len(indices) >= 2:
-        posmet_start = indices[1] + 1 
-        if str(df_log.iloc[posmet_start][0]).strip() == "No": 
-            posmet_start += 2
-        for i in range(posmet_start, len(df_log)):
-            row = df_log.iloc[i]
-            if str(row[0]).strip().upper() in ["TOTAL", "NAMA PEGAWAI"] or str(row[0]).startswith("LAPORAN"):
-                break
-            if pd.notna(row[1]) or pd.notna(row[4]):
-                posmet_data.append(row)
-                
+    for index, row in df_log.iterrows():
+        col0_raw = str(row[0]).strip().upper()
+        col0_clean = col0_raw.replace(" ", "")
+        col1 = str(row[1]).strip() if pd.notna(row[1]) else ""
+        col4 = str(row[4]).strip() if pd.notna(row[4]) else ""
+        
+        # Transisi Status Pembacaan
+        if bulan_str in col0_clean and state == 0:
+            state = 1
+            continue
+        elif "POSMETEOROLOGI" in col0_clean and state == 1:
+            state = 2
+            continue
+        elif bulan_str in col0_clean and state == 2:
+            state = 3
+            continue
+            
+        # Perekaman Data Stamet UMK
+        if state == 1:
+            if col0_raw in ["TOTAL", "NAMA PEGAWAI"] or col0_raw.startswith("LAPORAN"):
+                state = 2 # Berhenti mencari UMK
+                continue
+            if col1 or col4:
+                # Abaikan baris header tabel yang tersangkut
+                if "NAMA ALAT" not in col1.upper() and "PEKAN I" not in col4.upper() and col0_raw != "NO":
+                    stamet_data.append(row)
+                    
+        # Perekaman Data Posmet Tambolaka
+        elif state == 3:
+            if col0_raw in ["TOTAL", "NAMA PEGAWAI"] or col0_raw.startswith("LAPORAN"):
+                break # Berhenti total
+            if col1 or col4:
+                if "NAMA ALAT" not in col1.upper() and "PEKAN I" not in col4.upper() and col0_raw != "NO":
+                    posmet_data.append(row)
+                    
     return stamet_data, posmet_data
 
 # --- FUNGSI GENERATOR PDF ---
 class PDFKinerja(FPDF):
     def cetak_kop_surat(self):
+        """Kop Surat Presisi seperti BMKG"""
         y_awal = self.get_y()
         if os.path.exists(LOGO_FILE):
-            # Logo diperkecil agar tidak menembus batas bawah header
-            self.image(LOGO_FILE, 15, y_awal - 2, 22) 
+            self.image(LOGO_FILE, 12, y_awal, 25) # Logo di kiri
         
-        self.set_left_margin(40) 
         self.set_y(y_awal)
         self.set_font('helvetica', 'B', 13)
         self.cell(0, 5, 'BADAN METEOROLOGI, KLIMATOLOGI, DAN GEOFISIKA', align='C', new_x='LMARGIN', new_y='NEXT')
-        self.set_font('helvetica', 'B', 11)
+        self.set_font('helvetica', 'B', 12)
         self.cell(0, 5, 'STASIUN METEOROLOGI KELAS III UMBU MEHANG KUNDA', align='C', new_x='LMARGIN', new_y='NEXT')
         
         self.set_font('helvetica', '', 9)
@@ -94,7 +108,6 @@ class PDFKinerja(FPDF):
         self.cell(0, 4, 'Telp. (0387) 61227 | Fax: (0387) 61228 | Kode Pos 87114', align='C', new_x='LMARGIN', new_y='NEXT')
         self.cell(0, 4, 'Email: stamet.sumbatimur@bmkg.go.id | Website: http://ntt.bmkg.go.id', align='C', new_x='LMARGIN', new_y='NEXT')
         
-        self.set_left_margin(10)
         y_line = self.get_y() + 2
         self.set_line_width(1.0)
         self.line(10, y_line, self.w - 10, y_line)
@@ -103,7 +116,6 @@ class PDFKinerja(FPDF):
         self.set_y(y_line + 8)
 
 def draw_logbook_page(pdf, title, data_rows, is_posmet=False):
-    """Menggambar tabel logbook dengan fitur wrap text otomatis pada kolom"""
     pdf.set_font('helvetica', 'B', 10)
     pdf.cell(0, 6, 'LAPORAN HASIL MONITORING KONDISI PERALATAN OPERASIONAL UTAMA METEOROLOGI', align='C', new_x='LMARGIN', new_y='NEXT')
     pdf.cell(0, 6, title, align='C', new_x='LMARGIN', new_y='NEXT')
@@ -111,41 +123,35 @@ def draw_logbook_page(pdf, title, data_rows, is_posmet=False):
     
     if not data_rows:
         pdf.set_font('helvetica', '', 10)
-        pdf.cell(0, 6, "Data tidak ditemukan.", align='C')
+        pdf.cell(0, 6, "Data tidak ditemukan. Silakan cek format Excel.", align='C')
         return
 
     pdf.set_fill_color(220, 220, 220)
     pdf.set_font('helvetica', 'B', 8)
     
-    # Konfigurasi Kolom [No, Alat, Lokasi, Merk, P1, P2, P3, P4, Kalibrasi, Pengadaan]
+    # Kolom: No | Alat | Lokasi | Merk | PI | PII | PIII | PIV | Kalibrasi | Pengadaan
     w = [10, 60, 30, 35, 18, 18, 18, 18, 26, 22] 
     
-    # ---- DRAW HEADER ----
     x_start = pdf.get_x()
     y_start = pdf.get_y()
     
-    # Border dasar header
     pdf.rect(x_start, y_start, w[0], 12, style='DF')
     pdf.rect(x_start+w[0], y_start, w[1], 12, style='DF')
     pdf.rect(x_start+sum(w[:2]), y_start, w[2], 12, style='DF')
     pdf.rect(x_start+sum(w[:3]), y_start, w[3], 12, style='DF')
     
-    # Header Kondisi
     x_kondisi = x_start+sum(w[:4])
     pdf.rect(x_kondisi, y_start, sum(w[4:8]), 6, style='DF')
     
-    # Sub header Pekan
     pdf.rect(x_kondisi, y_start+6, w[4], 6, style='DF')
     pdf.rect(x_kondisi+w[4], y_start+6, w[5], 6, style='DF')
     pdf.rect(x_kondisi+sum(w[4:6]), y_start+6, w[6], 6, style='DF')
     pdf.rect(x_kondisi+sum(w[4:7]), y_start+6, w[7], 6, style='DF')
     
-    # Header Sisa
     x_sisa = x_start+sum(w[:8])
     pdf.rect(x_sisa, y_start, w[8], 12, style='DF')
     pdf.rect(x_sisa+w[8], y_start, w[9], 12, style='DF')
     
-    # Text Header
     pdf.set_xy(x_start, y_start+3)
     pdf.cell(w[0], 6, 'No', align='C')
     pdf.cell(w[1], 6, 'Nama Alat', align='C')
@@ -160,7 +166,6 @@ def draw_logbook_page(pdf, title, data_rows, is_posmet=False):
     pdf.cell(w[6], 6, 'PEKAN III', align='C')
     pdf.cell(w[7], 6, 'PEKAN IV', align='C')
     
-    # Multi-line header Tahun Kalibrasi
     pdf.set_xy(x_sisa, y_start + 1.5)
     pdf.multi_cell(w[8], 4, 'Tahun\nKalibrasi', align='C')
     pdf.set_xy(x_sisa+w[8], y_start+3)
@@ -168,34 +173,28 @@ def draw_logbook_page(pdf, title, data_rows, is_posmet=False):
     
     pdf.set_y(y_start + 12)
     
-    # ---- DRAW ROWS (Dengan Wrap Text) ----
     pdf.set_font('helvetica', '', 8)
     total_alat = 0
     for row in data_rows:
         cols = [str(x) if pd.notna(x) else "" for x in row]
         cols = cols + [""] * (10 - len(cols))
         
-        # Bersihkan timestamp
         if '00:00:00' in cols[8]: cols[8] = cols[8].split(' ')[0]
-        
-        # Custom Wrap Text untuk Lokasi
+        # Auto Wrap Lokasi
         cols[2] = cols[2].replace('Bandara Umbu Mehang Kunda', 'Bandara Umbu\nMehang Kunda')
         
-        # Hitung row height
         lines = 1
         if '\n' in cols[2] or len(cols[1]) > 40 or len(cols[3]) > 20:
             lines = 2
         row_h = lines * 5
         
-        # Gambar Border
         x = pdf.get_x()
         y = pdf.get_y()
         for idx_w, width in enumerate(w):
             pdf.rect(x, y, width, row_h)
             x += width
             
-        # Tulis Text tanpa border
-        x = pdf.get_x() - sum(w) # kembali ke x_start
+        x = pdf.get_x() - sum(w)
         for i, text in enumerate(cols):
             pdf.set_xy(x, y + (0.5 if lines==1 else 0))
             pdf.multi_cell(w[i], 5, text, border=0, align='C' if i!=1 else 'L')
@@ -204,7 +203,6 @@ def draw_logbook_page(pdf, title, data_rows, is_posmet=False):
         pdf.set_xy(10, y + row_h)
         total_alat += 1
 
-    # Baris TOTAL
     if is_posmet:
         pdf.set_font('helvetica', 'B', 8)
         lebar_gabungan = sum(w[:4])
@@ -220,7 +218,7 @@ def draw_logbook_page(pdf, title, data_rows, is_posmet=False):
 def generate_pdf(nama_teknisi, bulan, tahun, df_kegiatan, uploaded_excel, poin_korektif):
     pdf = PDFKinerja()
     
-    # === HALAMAN 1: NARASI (PORTRAIT, ADA KOP SURAT) ===
+    # === HALAMAN 1: NARASI (PORTRAIT) ===
     pdf.add_page(orientation='portrait')
     pdf.cetak_kop_surat()
     
@@ -266,26 +264,26 @@ def generate_pdf(nama_teknisi, bulan, tahun, df_kegiatan, uploaded_excel, poin_k
     pdf.cell(10, 6, "3.")
     pdf.cell(0, 6, "Laporan Ketersediaan Data Peralatan Otomatis", new_x='LMARGIN', new_y='NEXT')
     
-    # Tambahan Kondisional Poin 4
     if poin_korektif:
         pdf.set_x(10)
         pdf.cell(10, 6, "4.")
         pdf.cell(0, 6, "Laporan Hasil Pemeliharaan Korektif Peralatan Operasional Utama Meteorologi", new_x='LMARGIN', new_y='NEXT')
 
     
-    # === HALAMAN 2: LOGBOOK UMK (LANDSCAPE, ADA KOP SURAT) ===
+    # === HALAMAN 2 & 3: LOGBOOK DARI EXCEL (LANDSCAPE) ===
     if uploaded_excel is not None:
         try:
             df_log = pd.read_excel(uploaded_excel, sheet_name='LOGBOOK', header=None)
             stamet_data, posmet_data = parse_logbook(df_log, bulan)
             
+            # Hal 2: Stamet UMK (Punya Kop Surat)
             pdf.add_page(orientation='landscape')
             pdf.cetak_kop_surat()
             draw_logbook_page(pdf, "STASIUN METEOROLOGI UMBU MEHANG KUNDA", stamet_data, is_posmet=False)
             
-    # === HALAMAN 3: LOGBOOK POSMET (LANDSCAPE, TANPA KOP SURAT) ===
+            # Hal 3: Posmet (TIDAK Punya Kop Surat)
             pdf.add_page(orientation='landscape')
-            pdf.set_y(15) # Jarak atas karena tidak pakai kop surat
+            pdf.set_y(15) 
             draw_logbook_page(pdf, "POS METEOROLOGI TAMBOLAKA", posmet_data, is_posmet=True)
             
         except Exception as e:
@@ -295,55 +293,70 @@ def generate_pdf(nama_teknisi, bulan, tahun, df_kegiatan, uploaded_excel, poin_k
         pdf.add_page()
         pdf.cell(0, 10, "File Excel tidak diunggah. Data Logbook kosong.", align='C')
 
-
-    # === HALAMAN 4: LAMPIRAN FOTO (PORTRAIT, TANPA KOP SURAT) ===
+    # === HALAMAN 4: TABEL DOKUMENTASI FOTO (PORTRAIT) ===
     pdf.add_page(orientation='portrait')
-    pdf.set_y(20) # Jarak aman atas
+    # Sesuai instruksi: LAMPIRAN TIDAK PERLU KOP SURAT.
+    pdf.set_y(15)
     pdf.set_font('helvetica', 'B', 11)
-    pdf.cell(0, 10, f'LAMPIRAN KEGIATAN TEKNISI REGULER: {nama_teknisi.upper()}', align='C', new_x='LMARGIN', new_y='NEXT')
-    pdf.ln(5)
+    pdf.cell(0, 10, f'LAMPIRAN KEGIATAN TEKNISI REGULER: {nama_teknisi.upper()}', align='L', new_x='LMARGIN', new_y='NEXT')
+    pdf.ln(2)
     
-    y_start = pdf.get_y()
-    x_start = 10
-    col_width = 90
-    row_height = 80
+    # Render Tabel Header
+    pdf.set_fill_color(180, 200, 255) # Warna biru muda tabel
+    pdf.set_font('helvetica', 'B', 10)
+    pdf.cell(15, 8, 'NO', border=1, align='C', fill=True)
+    pdf.cell(175, 8, 'PENJELASAN', border=1, align='C', fill=True, new_x='LMARGIN', new_y='NEXT')
     
-    col_index = 0
+    pdf.set_font('helvetica', '', 10)
+    nomor_urut = 1
+    
     for index, row in df_kegiatan.iterrows():
-        # Tambah halaman baru TANPA Kop Surat jika penuh
-        if pdf.get_y() + row_height > 270:
-            pdf.add_page(orientation='portrait')
-            y_start = 20
-            pdf.set_y(y_start)
-            col_index = 0
-            
-        x_pos = x_start + (col_index * col_width)
-        
-        # Merubah format tanggal dari Database (YYYY-MM-DD ke DD Bulan YYYY)
         tgl_indo = format_tanggal_indo(row['tanggal'])
+        teks = f"{row['penjelasan_kegiatan']} Tanggal {tgl_indo}"
         
-        pdf.set_xy(x_pos, y_start)
-        pdf.set_font('helvetica', 'B', 9)
-        pdf.multi_cell(col_width - 5, 5, f"Tanggal: {tgl_indo}\n{row['penjelasan_kegiatan']}", align='C')
+        row_h = 75 # Tinggi paksa per baris foto
         
-        y_img = pdf.get_y() + 2
+        # Cek jika butuh halaman baru
+        if pdf.get_y() + row_h > 280:
+            pdf.add_page(orientation='portrait')
+            pdf.set_y(15)
+            # Cetak ulang header tabel di halaman baru
+            pdf.set_font('helvetica', 'B', 10)
+            pdf.cell(15, 8, 'NO', border=1, align='C', fill=True)
+            pdf.cell(175, 8, 'PENJELASAN', border=1, align='C', fill=True, new_x='LMARGIN', new_y='NEXT')
+            pdf.set_font('helvetica', '', 10)
+            
+        y_start = pdf.get_y()
         
+        # Buat Kotak Tabel
+        pdf.rect(10, y_start, 15, row_h)
+        pdf.rect(25, y_start, 175, row_h)
+        
+        # Tulis Nomor
+        pdf.set_xy(10, y_start + (row_h/2) - 3)
+        pdf.cell(15, 6, str(nomor_urut), align='C')
+        
+        # Tulis Gambar (Memaksa masuk batas secara proporsional)
+        img_y = y_start + 3
         if pd.notna(row['foto_path']) and os.path.exists(row['foto_path']):
             try:
-                pdf.image(row['foto_path'], x=x_pos + 10, y=y_img, w=70)
+                # FPDF2 keep_aspect_ratio menjaga agar foto tidak penyok
+                # X di set tengah tabel (25 + (175 - 120)/2 = 52.5)
+                pdf.image(row['foto_path'], x=52.5, y=img_y, w=120, h=60, keep_aspect_ratio=True)
             except:
-                pdf.set_xy(x_pos + 5, y_img)
-                pdf.cell(col_width - 10, 10, "[Format Gambar Error]", border=1, align='C')
+                pdf.set_xy(25, img_y + 25)
+                pdf.cell(175, 6, "[Format Gambar Error / Corrupt]", align='C')
         else:
-            pdf.set_xy(x_pos + 5, y_img)
-            pdf.cell(col_width - 10, 10, "[Tidak Ada Gambar]", border=1, align='C')
+            pdf.set_xy(25, img_y + 25)
+            pdf.cell(175, 6, "[Tidak Ada Gambar Diunggah]", align='C')
             
-        col_index += 1
-        if col_index > 1:
-            col_index = 0
-            y_start += row_height
+        # Tulis Keterangan Text
+        pdf.set_xy(25, y_start + row_h - 10)
+        pdf.cell(175, 6, teks, align='C')
+        
+        pdf.set_y(y_start + row_h)
+        nomor_urut += 1
             
-    # Simpan PDF Primer dari FPDF
     temp_pdf = f"temp_kinerja.pdf"
     pdf.output(temp_pdf)
     return temp_pdf
@@ -413,23 +426,20 @@ with tab3:
         filter_tahun = st.selectbox("Pilih Tahun", ["2026", "2027", "2028"])
         
     st.markdown("---")
-    st.markdown("#### 🖇️ Lampiran Dokumen Tambahan")
+    st.markdown("#### 🖇️ Konfigurasi Lampiran")
     
     uploaded_excel = st.file_uploader("1. Wajib: File Excel Logbook (Peralatan Teknis.xlsx)", type=['xlsx', 'xls'])
+    poin_korektif = st.checkbox("Tambahkan Poin Ke-4 (Laporan Korektif/Kalibrasi) di Narasi Hal. 1")
     
-    # Opsi Tambahan Poin Ke-4
-    poin_korektif = st.checkbox("Tambahkan Poin Ke-4 (Laporan Korektif/Kalibrasi) di Narasi")
-    
-    # Fitur Merge PDF jika modul pypdf terinstal
     if PYPDF_INSTALLED:
-        pdf_kalibrasi = st.file_uploader("2. Opsional: Upload PDF Laporan Kalibrasi/Korektif (Akan digabungkan di halaman akhir)", type=['pdf'])
+        pdf_kalibrasi = st.file_uploader("2. Opsional: Upload PDF Laporan Kalibrasi/Korektif (Digabungkan di halaman akhir)", type=['pdf'])
     else:
-        st.warning("⚠️ Fitur Penggabungan PDF Tambahan (Merge) dinonaktifkan. Anda harus menginstal modul pypdf di server terlebih dahulu: `pip install pypdf`")
+        st.warning("⚠️ Modul 'pypdf' tidak ditemukan. Penggabungan PDF eksternal dinonaktifkan.")
         pdf_kalibrasi = None
     
     if st.button("Tarik Data & Generate PDF Lengkap 🚀"):
         if uploaded_excel is None:
-            st.error("Silakan unggah File Excel terlebih dahulu agar Logbook bisa ditarik!")
+            st.error("Silakan unggah File Excel terlebih dahulu!")
         else:
             bulan_dict = {"Januari":"01", "Februari":"02", "Maret":"03", "April":"04", "Mei":"05", "Juni":"06", "Juli":"07", "Agustus":"08", "September":"09", "Oktober":"10", "November":"11", "Desember":"12"}
             bulan_angka = bulan_dict[filter_bulan]
@@ -437,17 +447,16 @@ with tab3:
             query = f"SELECT * FROM e_kinerja WHERE nama_teknisi = '{filter_nama}' AND strftime('%m', tanggal) = '{bulan_angka}' AND strftime('%Y', tanggal) = '{filter_tahun}'"
             df_filter = pd.read_sql(query, conn)
             
-            with st.spinner('Menyusun dan Menggabungkan Dokumen PDF...'):
+            with st.spinner('Menyusun Logbook & Memformat Tabel Lampiran...'):
                 temp_pdf = generate_pdf(filter_nama, filter_bulan, filter_tahun, df_filter, uploaded_excel, poin_korektif)
                 final_filename = f"E_Kinerja_{filter_nama.replace(' ', '_')}_{filter_bulan}_{filter_tahun}.pdf"
                 
-                # Proses Merge PDF
+                # Proses Merge Jika Ada PDF Eksternal
                 if PYPDF_INSTALLED:
                     merger = PdfWriter()
-                    merger.append(temp_pdf) # Masukkan PDF Utama BMKG
+                    merger.append(temp_pdf) 
                     
                     if pdf_kalibrasi is not None:
-                        # Masukkan PDF Lampiran
                         kalibrasi_path = os.path.join(UPLOAD_DIR, "temp_kalibrasi.pdf")
                         with open(kalibrasi_path, "wb") as f:
                             f.write(pdf_kalibrasi.getbuffer())
@@ -456,10 +465,9 @@ with tab3:
                     with open(final_filename, "wb") as f_out:
                         merger.write(f_out)
                 else:
-                    # Jika pypdf belum diinstal, pakai file mentah dari FPDF
                     os.rename(temp_pdf, final_filename)
                 
-            st.success("✅ Dokumen PDF E-Kinerja berhasil dibuat!")
+            st.success("✅ Dokumen PDF E-Kinerja berhasil dibuat sempurna!")
             
             with open(final_filename, "rb") as pdf_data:
                 st.download_button(
