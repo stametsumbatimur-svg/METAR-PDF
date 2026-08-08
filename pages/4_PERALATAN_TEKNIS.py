@@ -48,6 +48,44 @@ QUARTER_MAP = {
     }
 }
 
+# --- PALET WARNA JADWAL PEMELIHARAAN ---
+COLOR_MAP_JADWAL = {
+    "O": (169, 223, 191),   # Hijau Muda - Pemeliharaan Taman Alat
+    "D": (174, 214, 241),   # Biru Muda - Pemeliharaan Display Bandara
+    "A": (249, 231, 159),   # Kuning Muda - Pemeliharaan AWOS
+    "DL": (210, 180, 222),  # Ungu Muda - Pengolahan OLA & SLA
+    "G": (248, 196, 113)    # Oranye Muda - Pembuatan Gas
+}
+
+# --- HELPER PEWARNAAN GRADASI GRADIENT (0% - 100%) ---
+def get_percentage_color(val):
+    try:
+        if isinstance(val, str):
+            val = val.replace('%', '').strip()
+        v = float(val)
+        if 0 < v <= 1.0:
+            v = v * 100.0
+        v = max(0.0, min(100.0, v))
+    except (ValueError, TypeError):
+        return (255, 255, 255) # Putih untuk data kosong/invalid
+
+    if v >= 100.0:
+        return (169, 223, 191) # Hijau Soft
+    elif v >= 80.0:
+        # Gradasi Kuning -> Hijau
+        ratio = (v - 80.0) / 20.0
+        r = int(249 + (169 - 249) * ratio)
+        g = int(231 + (223 - 231) * ratio)
+        b = int(159 + (191 - 159) * ratio)
+        return (r, g, b)
+    else:
+        # Gradasi Merah -> Kuning
+        ratio = v / 80.0
+        r = int(241 + (249 - 241) * ratio)
+        g = int(148 + (231 - 148) * ratio)
+        b = int(138 + (159 - 138) * ratio)
+        return (r, g, b)
+
 # --- HELPER DATABASE ---
 def get_db_connection():
     return sqlite3.connect(DB_FILE)
@@ -144,72 +182,46 @@ def parse_jadwal(df_jadwal, nama_teknisi, bulan_nama):
             
     return nama_teknisi, nip, jadwal_days
 
-# --- PARSER OLA SLA EXCEL ---
+# --- HELPER PARSER ITEM OLA SLA ---
+def _extract_ola_item(df_ola, row_st, row_dt):
+    status, data = [], []
+    for c in range(3, 34):
+        v_st = df_ola.iloc[row_st, c] if c < df_ola.shape[1] else None
+        v_dt = df_ola.iloc[row_dt, c] if c < df_ola.shape[1] else None
+        
+        st_str = "" if pd.isna(v_st) or str(v_st).strip().lower() == 'nan' else str(v_st).strip()
+        if pd.isna(v_dt) or str(v_dt).strip().lower() in ['nan', '']:
+            dt_str = ""
+        elif isinstance(v_dt, (int, float)):
+            dt_str = f"{float(v_dt):.2f}"
+        else:
+            dt_str = str(v_dt).strip()
+            
+        status.append(st_str)
+        data.append(dt_str)
+        
+    return {
+        'no': str(df_ola.iloc[row_st, 0]).strip().replace('.0', ''),
+        'kode': str(df_ola.iloc[row_st, 1]).strip().replace('.0', ''),
+        'nama': str(df_ola.iloc[row_st, 2]).strip(),
+        'status_days': status,
+        'status_accum': df_ola.iloc[row_st, 34] if 34 < df_ola.shape[1] else 1,
+        'data_ratios': data,
+        'data_accum': df_ola.iloc[row_dt, 34] if 34 < df_ola.shape[1] else 1
+    }
+
 def parse_olasla(df_ola, bulan_nama):
     bulan_target = bulan_nama.upper()
-    idx_bulan = []
-    for i in range(len(df_ola)):
-        val = str(df_ola.iloc[i, 2]).strip().upper()
-        if val == bulan_target:
-            idx_bulan.append(i)
+    idx_bulan = [i for i in range(len(df_ola)) if str(df_ola.iloc[i, 2]).strip().upper() == bulan_target]
             
     if not idx_bulan:
         return None
         
     row_m = idx_bulan[0]
-    
-    status1, data1 = [], []
-    for c in range(3, 34):
-        v_st = df_ola.iloc[row_m + 3, c] if c < df_ola.shape[1] else None
-        v_dt = df_ola.iloc[row_m + 4, c] if c < df_ola.shape[1] else None
-        st_str = "" if pd.isna(v_st) or str(v_st).strip().lower() == 'nan' else str(v_st).strip()
-        if pd.isna(v_dt) or str(v_dt).strip().lower() == 'nan' or str(v_dt).strip() == "":
-            dt_str = ""
-        elif isinstance(v_dt, (int, float)):
-            dt_str = f"{float(v_dt):.2f}"
-        else:
-            dt_str = str(v_dt).strip()
-        status1.append(st_str)
-        data1.append(dt_str)
-        
-    status2, data2 = [], []
-    for c in range(3, 34):
-        v_st = df_ola.iloc[row_m + 5, c] if c < df_ola.shape[1] else None
-        v_dt = df_ola.iloc[row_m + 6, c] if c < df_ola.shape[1] else None
-        st_str = "" if pd.isna(v_st) or str(v_st).strip().lower() == 'nan' else str(v_st).strip()
-        if pd.isna(v_dt) or str(v_dt).strip().lower() == 'nan' or str(v_dt).strip() == "":
-            dt_str = ""
-        elif isinstance(v_dt, (int, float)):
-            dt_str = f"{float(v_dt):.2f}"
-        else:
-            dt_str = str(v_dt).strip()
-        status2.append(st_str)
-        data2.append(dt_str)
-
-    item1_info = {
-        'no': str(df_ola.iloc[row_m + 3, 0]).strip().replace('.0', ''),
-        'kode': str(df_ola.iloc[row_m + 3, 1]).strip().replace('.0', ''),
-        'nama': str(df_ola.iloc[row_m + 3, 2]).strip(),
-        'status_days': status1,
-        'status_accum': df_ola.iloc[row_m + 3, 34] if 34 < df_ola.shape[1] else 1,
-        'data_ratios': data1,
-        'data_accum': df_ola.iloc[row_m + 4, 34] if 34 < df_ola.shape[1] else 1
-    }
-    
-    item2_info = {
-        'no': str(df_ola.iloc[row_m + 5, 0]).strip().replace('.0', ''),
-        'kode': str(df_ola.iloc[row_m + 5, 1]).strip().replace('.0', ''),
-        'nama': str(df_ola.iloc[row_m + 5, 2]).strip(),
-        'status_days': status2,
-        'status_accum': df_ola.iloc[row_m + 5, 34] if 34 < df_ola.shape[1] else 1,
-        'data_ratios': data2,
-        'data_accum': df_ola.iloc[row_m + 6, 34] if 34 < df_ola.shape[1] else 1
-    }
-    
     return {
         'bulan': bulan_nama,
-        'item1': item1_info,
-        'item2': item2_info
+        'item1': _extract_ola_item(df_ola, row_m + 3, row_m + 4),
+        'item2': _extract_ola_item(df_ola, row_m + 5, row_m + 6)
     }
 
 # --- CLASS GENERATOR PDF ---
@@ -389,11 +401,19 @@ def draw_jadwal_page(pdf, nama_teknisi, nip, bulan_nama, tahun, triwulan_label, 
     pdf.set_font('helvetica', '', 7)
     pdf.cell(w_name, 4, f"NIP. {nip}" if nip else "", align='L')
     
-    pdf.set_font('helvetica', '', 6)
+    # --- RENDER TANGGAL JADWAL DENGAN WARNA KODE ---
+    pdf.set_font('helvetica', 'B', 7)
     for d in range(1, 32):
         x_d = 10 + w_name + (d - 1) * w_day
-        pdf.rect(x_d, y_data, w_day, total_row_h)
-        val = days_dict.get(d, '')
+        val = str(days_dict.get(d, '')).strip().upper()
+        
+        if val in COLOR_MAP_JADWAL:
+            r, g, b = COLOR_MAP_JADWAL[val]
+            pdf.set_fill_color(r, g, b)
+            pdf.rect(x_d, y_data, w_day, total_row_h, style='DF')
+        else:
+            pdf.rect(x_d, y_data, w_day, total_row_h)
+            
         pdf.set_xy(x_d, y_data + (total_row_h / 2) - 2)
         pdf.cell(w_day, 4, val, align='C')
         
@@ -412,10 +432,17 @@ def draw_jadwal_page(pdf, nama_teknisi, nip, bulan_nama, tahun, triwulan_label, 
         ("G", "= Pembuatan Gas")
     ]
     
+    # --- RENDER LEGENDA DENGAN WARNA MAPPING ---
     for kode, ket in legenda:
         pdf.set_x(10)
+        curr_y = pdf.get_y()
+        if kode in COLOR_MAP_JADWAL:
+            r, g, b = COLOR_MAP_JADWAL[kode]
+            pdf.set_fill_color(r, g, b)
+            pdf.rect(10, curr_y, 8, 4, style='DF')
+            
         pdf.set_font('helvetica', 'B', 8)
-        pdf.cell(8, 4, kode, align='L')
+        pdf.cell(8, 4, kode, align='C')
         pdf.set_font('helvetica', '', 8)
         pdf.cell(60, 4, ket, ln=1)
         
@@ -466,10 +493,8 @@ def draw_olasla_page(pdf, ola_data, nama_teknisi, nip_teknisi, tahun):
     
     pdf.set_xy(10, y_hdr + 3)
     pdf.cell(w_left, 4, 'NAMA DAN LOKASI PERALATAN', align='C')
-    
     pdf.set_xy(10 + w_left, y_hdr + 0.5)
     pdf.cell(w_day * 31, 4, 'KONDISI PERALATAN DAN DATA TERSEDIA', align='C')
-    
     pdf.set_xy(10 + w_left + w_day * 31, y_hdr + 1)
     pdf.multi_cell(w_accum, 3.5, 'AKUMULASI\nON-LINE', align='C')
     
@@ -481,10 +506,10 @@ def draw_olasla_page(pdf, ola_data, nama_teknisi, nip_teknisi, tahun):
         
     y_data = y_hdr + 10
     row_h = 5.5
-    
     items = [ola_data['item1'], ola_data['item2']]
     
     for item in items:
+        # --- ROW STATUS ---
         pdf.rect(10, y_data, w_no, row_h)
         pdf.set_xy(10, y_data + 1)
         pdf.set_font('helvetica', 'B', 7)
@@ -500,23 +525,37 @@ def draw_olasla_page(pdf, ola_data, nama_teknisi, nip_teknisi, tahun):
         pdf.set_font('helvetica', 'B', 7)
         pdf.cell(w_nama, 4, str(item['nama']), align='L')
         
-        pdf.set_font('helvetica', '', 5.5)
+        pdf.set_font('helvetica', 'B', 5.5)
         for d in range(1, 32):
             x_d = 10 + w_left + (d - 1) * w_day
-            pdf.rect(x_d, y_data, w_day, row_h)
-            st_val = item['status_days'][d-1] if d-1 < len(item['status_days']) else ''
-            pdf.set_xy(x_d, y_data + 1)
-            pdf.cell(w_day, 4, str(st_val), align='C')
+            st_val = str(item['status_days'][d-1] if d-1 < len(item['status_days']) else '').strip().upper()
             
-        pdf.rect(10 + w_left + w_day * 31, y_data, w_accum, row_h)
+            # Warna ON/OFF
+            if st_val == "ON":
+                pdf.set_fill_color(169, 223, 191) # Hijau Soft
+                pdf.rect(x_d, y_data, w_day, row_h, style='DF')
+            elif st_val == "OFF":
+                pdf.set_fill_color(241, 148, 138) # Merah Soft
+                pdf.rect(x_d, y_data, w_day, row_h, style='DF')
+            else:
+                pdf.rect(x_d, y_data, w_day, row_h)
+                
+            pdf.set_xy(x_d, y_data + 1)
+            pdf.cell(w_day, 4, st_val, align='C')
+            
+        # Akumulasi Status dengan Gradasi Warna
+        acc_st = item['status_accum']
+        r, g, b = get_percentage_color(acc_st)
+        pdf.set_fill_color(r, g, b)
+        pdf.rect(10 + w_left + w_day * 31, y_data, w_accum, row_h, style='DF')
         pdf.set_xy(10 + w_left + w_day * 31, y_data + 1)
         pdf.set_font('helvetica', 'B', 7)
-        acc_st = item['status_accum']
-        acc_st_str = f"{float(acc_st)*100:.0f}%" if isinstance(acc_st, (int, float)) else str(acc_st)
+        acc_st_str = f"{float(acc_st)*100:.0f}%" if isinstance(acc_st, (int, float)) and acc_st <= 1 else str(acc_st)
         pdf.cell(w_accum, 4, acc_st_str, align='C')
         
         y_data += row_h
         
+        # --- ROW DATA ---
         pdf.rect(10, y_data, w_no, row_h)
         pdf.rect(10 + w_no, y_data, w_kode, row_h)
         pdf.set_xy(10 + w_no, y_data + 1)
@@ -528,16 +567,26 @@ def draw_olasla_page(pdf, ola_data, nama_teknisi, nip_teknisi, tahun):
         pdf.set_font('helvetica', '', 5)
         for d in range(1, 32):
             x_d = 10 + w_left + (d - 1) * w_day
-            pdf.rect(x_d, y_data, w_day, row_h)
             dt_str = item['data_ratios'][d-1] if d-1 < len(item['data_ratios']) else ''
+            
+            if dt_str != "":
+                r_d, g_d, b_d = get_percentage_color(dt_str)
+                pdf.set_fill_color(r_d, g_d, b_d)
+                pdf.rect(x_d, y_data, w_day, row_h, style='DF')
+            else:
+                pdf.rect(x_d, y_data, w_day, row_h)
+                
             pdf.set_xy(x_d, y_data + 1)
             pdf.cell(w_day, 4, str(dt_str), align='C')
             
-        pdf.rect(10 + w_left + w_day * 31, y_data, w_accum, row_h)
+        # Akumulasi Data dengan Gradasi Warna
+        acc_dt = item['data_accum']
+        r_da, g_da, b_da = get_percentage_color(acc_dt)
+        pdf.set_fill_color(r_da, g_da, b_da)
+        pdf.rect(10 + w_left + w_day * 31, y_data, w_accum, row_h, style='DF')
         pdf.set_xy(10 + w_left + w_day * 31, y_data + 1)
         pdf.set_font('helvetica', 'B', 7)
-        acc_dt = item['data_accum']
-        acc_dt_str = f"{float(acc_dt)*100:.2f}%" if isinstance(acc_dt, (int, float)) else str(acc_dt)
+        acc_dt_str = f"{float(acc_dt)*100:.2f}%" if isinstance(acc_dt, (int, float)) and acc_dt <= 1 else str(acc_dt)
         pdf.cell(w_accum, 4, acc_dt_str, align='C')
         
         y_data += row_h
@@ -612,7 +661,7 @@ def generate_pdf_bytes(nama_teknisi, label_periode, triwulan_label, tahun, df_ke
         pdf.cell(0, 6, item, ln=1)
         pdf.set_x(10)
 
-    # Sheet references from Excel
+    # Sheet references dinamis berdasarkan tahun
     df_log = None
     df_jadwal_sheet = None
     df_ola_sheet = None
@@ -623,13 +672,23 @@ def generate_pdf_bytes(nama_teknisi, label_periode, triwulan_label, tahun, df_ke
         except Exception:
             pass
         try:
-            df_jadwal_sheet = pd.read_excel(uploaded_excel, sheet_name='JADWAL 2026', header=None)
+            df_jadwal_sheet = pd.read_excel(uploaded_excel, sheet_name=f'JADWAL {tahun}', header=None)
         except Exception:
-            pass
+            try:
+                # Fallback search sheet containing JADWAL
+                xl = pd.ExcelFile(uploaded_excel)
+                match = [s for s in xl.sheet_names if 'JADWAL' in s.upper()]
+                if match: df_jadwal_sheet = pd.read_excel(uploaded_excel, sheet_name=match[0], header=None)
+            except Exception: pass
         try:
-            df_ola_sheet = pd.read_excel(uploaded_excel, sheet_name='OLA SLA 2026', header=None)
+            df_ola_sheet = pd.read_excel(uploaded_excel, sheet_name=f'OLA SLA {tahun}', header=None)
         except Exception:
-            pass
+            try:
+                # Fallback search sheet containing OLA
+                xl = pd.ExcelFile(uploaded_excel)
+                match = [s for s in xl.sheet_names if 'OLA' in s.upper()]
+                if match: df_ola_sheet = pd.read_excel(uploaded_excel, sheet_name=match[0], header=None)
+            except Exception: pass
 
     # --- 2. LOGBOOK EXCEL ---
     if df_log is not None:
@@ -647,15 +706,20 @@ def generate_pdf_bytes(nama_teknisi, label_periode, triwulan_label, tahun, df_ke
             pdf.set_y(15) 
             draw_logbook_page(pdf, f"POS METEOROLOGI TAMBOLAKA - BULAN {bulan_item.upper()}", posmet_data, total_aloptama, is_posmet=True)
 
+    # SIMPAN NIP TEKNISI DINAMIS DARIPADA HARDCODED
+    nip_teknisi_dinamis = ""
+
     # --- 3. JADWAL PEMELIHARAAN (TANPA KOP SURAT) ---
     if df_jadwal_sheet is not None:
         for bulan_item in list_bulan_logbook:
             name_res, nip_res, days_dict = parse_jadwal(df_jadwal_sheet, nama_teknisi, bulan_item)
+            if nip_res: 
+                nip_teknisi_dinamis = nip_res
             pdf.add_page(orientation='landscape')
             pdf.set_y(15)
             draw_jadwal_page(pdf, name_res, nip_res, bulan_item, tahun, triwulan_label, days_dict)
 
-    # --- 4. LAMPIRAN DOKUMENTASI FOTO (DIPISAHKAN PER BULAN) ---
+    # --- 4. LAMPIRAN DOKUMENTASI FOTO ---
     for bulan_item in list_bulan_logbook:
         b_code = MONTH_MAP[bulan_item]
         df_kegiatan_bulan = df_kegiatan[df_kegiatan['tanggal'].astype(str).str.slice(5, 7) == b_code] if not df_kegiatan.empty else pd.DataFrame()
@@ -731,13 +795,13 @@ def generate_pdf_bytes(nama_teknisi, label_periode, triwulan_label, tahun, df_ke
                     
                 y_start += row_h
 
-    # --- 5. OLA SLA (TANPA KOP SURAT) ---
+    # --- 5. OLA SLA (TANPA KOP SURAT, MENGGUNAKAN NIP DINAMIS) ---
     if df_ola_sheet is not None:
         for bulan_item in list_bulan_logbook:
             ola_data = parse_olasla(df_ola_sheet, bulan_item)
             pdf.add_page(orientation='landscape')
             pdf.set_y(15)
-            draw_olasla_page(pdf, ola_data, nama_teknisi, "200401122025121002", tahun)
+            draw_olasla_page(pdf, ola_data, nama_teknisi, nip_teknisi_dinamis, tahun)
 
     out = pdf.output(dest='S')
     if isinstance(out, str):
