@@ -276,14 +276,16 @@ def draw_logbook_page(pdf, title, data_rows, total_alat_keseluruhan=24, is_posme
         pdf.cell(w[4], 6, str(total_alat_keseluruhan), border=0, align='C')
         pdf.set_y(y + 6)
 
+# --- 3. DRAW JADWAL PEMELIHARAAN (RATA KIRI, TANPA KOP, MERGE TANGGAL 1-31) ---
 def draw_jadwal_page(pdf, nama_teknisi, nip, bulan_nama, tahun, triwulan_label, days_dict):
-    pdf.set_font('helvetica', 'B', 11)
-    pdf.cell(0, 5, 'JADWAL PEMELIHARAAN', align='C', new_x='LMARGIN', new_y='NEXT')
-    pdf.cell(0, 5, 'STASIUN METEOROLOGI UMBU MEHANG KUNDA', align='C', new_x='LMARGIN', new_y='NEXT')
-    pdf.cell(0, 5, f'TAHUN : {tahun}', align='C', new_x='LMARGIN', new_y='NEXT')
+    # Judul Rata Kiri
+    pdf.set_font('helvetica', 'B', 10)
+    pdf.cell(0, 5, 'JADWAL PEMELIHARAAN', align='L', new_x='LMARGIN', new_y='NEXT')
+    pdf.cell(0, 5, 'STASIUN METEOROLOGI UMBU MEHANG KUNDA', align='L', new_x='LMARGIN', new_y='NEXT')
+    pdf.cell(0, 5, f'TAHUN : {tahun}', align='L', new_x='LMARGIN', new_y='NEXT')
     if triwulan_label:
-        pdf.cell(0, 5, f'{triwulan_label.upper()}', align='C', new_x='LMARGIN', new_y='NEXT')
-    pdf.cell(0, 5, f'BULAN : {bulan_nama.upper()}', align='C', new_x='LMARGIN', new_y='NEXT')
+        pdf.cell(0, 5, f'{triwulan_label.upper()}', align='L', new_x='LMARGIN', new_y='NEXT')
+    pdf.cell(0, 5, f'BULAN : {bulan_nama.upper()}', align='L', new_x='LMARGIN', new_y='NEXT')
     pdf.ln(4)
     
     w_name = 60
@@ -293,15 +295,16 @@ def draw_jadwal_page(pdf, nama_teknisi, nip, bulan_nama, tahun, triwulan_label, 
     pdf.set_font('helvetica', 'B', 8)
     pdf.set_fill_color(220, 220, 220)
     
+    # Header Tabel: NAMA PEGAWAI | TANGGAL
     pdf.rect(10, y_hdr, w_name, 10, style='DF')
     pdf.rect(10 + w_name, y_hdr, w_day * 31, 5, style='DF')
     
-    pdf.set_xy(10, y_hdr + 1)
+    pdf.set_xy(10, y_hdr + 3)
     pdf.cell(w_name, 4, 'NAMA PEGAWAI', align='C')
     pdf.set_xy(10 + w_name, y_hdr + 0.5)
     pdf.cell(w_day * 31, 4, 'TANGGAL', align='C')
     
-    pdf.rect(10 + w_name, y_hdr + 5, w_day * 31, 5, style='DF')
+    # Header Tabel: Angka 1..31
     for d in range(1, 32):
         x_d = 10 + w_name + (d - 1) * w_day
         pdf.rect(x_d, y_hdr + 5, w_day, 5, style='DF')
@@ -309,34 +312,34 @@ def draw_jadwal_page(pdf, nama_teknisi, nip, bulan_nama, tahun, triwulan_label, 
         pdf.cell(w_day, 4, str(d), align='C')
         
     y_data = y_hdr + 10
-    row_h = 7
+    row_h = 6
+    total_row_h = row_h * 2 # Merge tinggi sel tanggal 1-31 (12 mm)
     
+    # Kolom Kiri: Nama Pegawai
     pdf.rect(10, y_data, w_name, row_h)
-    pdf.set_xy(10, y_data + 1.5)
+    pdf.set_xy(10, y_data + 1)
     pdf.set_font('helvetica', 'B', 7)
     pdf.cell(w_name, 4, nama_teknisi, align='L')
     
-    pdf.set_font('helvetica', '', 6)
-    for d in range(1, 32):
-        x_d = 10 + w_name + (d - 1) * w_day
-        pdf.rect(x_d, y_data, w_day, row_h)
-        val = days_dict.get(d, '')
-        pdf.set_xy(x_d, y_data + 1.5)
-        pdf.cell(w_day, 4, val, align='C')
-        
-    y_nip = y_data + row_h
-    pdf.rect(10, y_nip, w_name, row_h)
-    pdf.set_xy(10, y_nip + 1.5)
+    # Kolom Kiri: NIP
+    pdf.rect(10, y_data + row_h, w_name, row_h)
+    pdf.set_xy(10, y_data + row_h + 1)
     pdf.set_font('helvetica', '', 7)
     pdf.cell(w_name, 4, f"NIP. {nip}" if nip else "", align='L')
     
+    # Kolom Tanggal (1..31): DI-MERGE DENGAN BARIS NIP (Tinggi 12mm)
+    pdf.set_font('helvetica', '', 6)
     for d in range(1, 32):
         x_d = 10 + w_name + (d - 1) * w_day
-        pdf.rect(x_d, y_nip, w_day, row_h)
+        pdf.rect(x_d, y_data, w_day, total_row_h) # Kotak gabungan rata atas hingga bawah
+        val = days_dict.get(d, '')
+        pdf.set_xy(x_d, y_data + (total_row_h / 2) - 2)
+        pdf.cell(w_day, 4, val, align='C')
         
-    pdf.set_y(y_nip + row_h + 8)
+    pdf.set_y(y_data + total_row_h + 8)
     y_sec = pdf.get_y()
     
+    # Legenda Keterangan
     pdf.set_font('helvetica', 'B', 8)
     pdf.set_xy(10, y_sec)
     pdf.cell(40, 4, 'KETERANGAN:', new_x='LMARGIN', new_y='NEXT')
@@ -356,6 +359,7 @@ def draw_jadwal_page(pdf, nama_teknisi, nip, bulan_nama, tahun, triwulan_label, 
         pdf.set_font('helvetica', '', 8)
         pdf.cell(60, 4, ket, new_x='LMARGIN', new_y='NEXT')
         
+    # Tanda Tangan
     pdf.set_xy(200, y_sec)
     pdf.set_font('helvetica', '', 9)
     pdf.cell(80, 4, f'Waingapu, 31 {bulan_nama} {tahun}', align='C', new_x='LMARGIN', new_y='NEXT')
@@ -439,12 +443,12 @@ def generate_pdf_bytes(nama_teknisi, label_periode, triwulan_label, tahun, df_ke
             pdf.add_page()
             pdf.cell(0, 10, f"Error membaca sheet LOGBOOK: {e}", align='C')
 
-    # --- 3. JADWAL PEMELIHARAAN ---
+    # --- 3. JADWAL PEMELIHARAAN (TANPA KOP SURAT) ---
     if df_jadwal_sheet is not None:
         for bulan_item in list_bulan_logbook:
             name_res, nip_res, days_dict = parse_jadwal(df_jadwal_sheet, nama_teknisi, bulan_item)
             pdf.add_page(orientation='landscape')
-            pdf.cetak_kop_surat()
+            pdf.set_y(15) # Mulai dari margin atas tanpa kop surat
             draw_jadwal_page(pdf, name_res, nip_res, bulan_item, tahun, triwulan_label, days_dict)
 
     # --- 4. LAMPIRAN DOKUMENTASI FOTO ---
