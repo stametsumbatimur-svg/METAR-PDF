@@ -4,6 +4,7 @@ import sqlite3
 import os
 import tempfile
 from datetime import datetime
+from PIL import Image
 from fpdf import FPDF
 
 try:
@@ -12,7 +13,7 @@ try:
 except ImportError:
     PYPDF_INSTALLED = False
 
-# --- CONFIGURATION ---
+# --- KONFIGURASI AWAL ---
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 LOGO_FILE = "logo_bmkg.png"
@@ -47,7 +48,7 @@ QUARTER_MAP = {
     }
 }
 
-# --- DATABASE HELPERS ---
+# --- HELPER DATABASE ---
 def get_db_connection():
     return sqlite3.connect(DB_FILE)
 
@@ -67,7 +68,7 @@ def init_db():
 
 init_db()
 
-# --- DATE FORMATTER ---
+# --- FORMATTER TANGGAL INDONESIA ---
 def format_tanggal_indo(tanggal_str):
     try:
         dt = datetime.strptime(tanggal_str, "%Y-%m-%d")
@@ -77,7 +78,7 @@ def format_tanggal_indo(tanggal_str):
     except Exception:
         return tanggal_str
 
-# --- LOGBOOK PARSER ---
+# --- PARSER EXCEL LOGBOOK ---
 def parse_logbook(df_log, bulan):
     bulan_str = f"BULAN {bulan.upper()}"
     stamet_data, posmet_data = [], []
@@ -108,17 +109,18 @@ def parse_logbook(df_log, bulan):
                 
     return stamet_data, posmet_data
 
-# --- PDF GENERATOR CLASS ---
+# --- CLASS GENERATOR PDF ---
 class PDFKinerja(FPDF):
     def cetak_kop_surat(self):
         y_awal = self.get_y()
         if os.path.exists(LOGO_FILE):
-            self.image(LOGO_FILE, 15, y_awal - 2, 22)
+            # Logo presisi: lebar 17mm, rasio tinggi otomatis
+            self.image(LOGO_FILE, x=14, y=y_awal + 1, w=17)
             
         self.set_y(y_awal)
-        self.set_font('helvetica', 'B', 14)
+        self.set_font('helvetica', 'B', 13)
         self.cell(0, 5, 'BADAN METEOROLOGI, KLIMATOLOGI, DAN GEOFISIKA', align='C', new_x='LMARGIN', new_y='NEXT')
-        self.set_font('helvetica', 'B', 12)
+        self.set_font('helvetica', 'B', 11)
         self.cell(0, 5, 'STASIUN METEOROLOGI KELAS III UMBU MEHANG KUNDA', align='C', new_x='LMARGIN', new_y='NEXT')
         
         self.set_font('helvetica', '', 9)
@@ -172,7 +174,7 @@ def draw_header_table(pdf, x_start, y_start, w):
     pdf.set_xy(x_sisa+w[8], y_start+3)
     pdf.cell(w[9], 6, 'Pengadaan', align='C')
 
-def draw_logbook_page(pdf, title, data_rows, is_posmet=False):
+def draw_logbook_page(pdf, title, data_rows, total_alat_keseluruhan=24, is_posmet=False):
     pdf.set_font('helvetica', 'B', 10)
     pdf.cell(0, 6, 'LAPORAN HASIL MONITORING KONDISI PERALATAN OPERASIONAL UTAMA METEOROLOGI', align='C', new_x='LMARGIN', new_y='NEXT')
     pdf.cell(0, 6, title, align='C', new_x='LMARGIN', new_y='NEXT')
@@ -188,7 +190,6 @@ def draw_logbook_page(pdf, title, data_rows, is_posmet=False):
     
     pdf.set_y(pdf.get_y() + 12)
     pdf.set_font('helvetica', '', 8)
-    total_alat = 0
     
     for row in data_rows:
         cols = [str(x).replace("nan", "") for x in row]
@@ -224,8 +225,8 @@ def draw_logbook_page(pdf, title, data_rows, is_posmet=False):
             x += w[i]
             
         pdf.set_xy(10, y + row_h)
-        total_alat += 1
 
+    # Menampilkan total resmi 24 unit Aloptama pada akhir Posmet
     if is_posmet:
         pdf.set_font('helvetica', 'B', 8)
         lebar_gabungan = sum(w[:4])
@@ -239,13 +240,13 @@ def draw_logbook_page(pdf, title, data_rows, is_posmet=False):
         pdf.rect(10+lebar_gabungan, y, w[4], 6)
         pdf.set_xy(10, y)
         pdf.cell(lebar_gabungan, 6, 'TOTAL', border=0, align='C')
-        pdf.cell(w[4], 6, str(total_alat), border=0, align='C')
+        pdf.cell(w[4], 6, str(total_alat_keseluruhan), border=0, align='C')
         pdf.set_y(y + 6)
 
 def generate_pdf_bytes(nama_teknisi, label_periode, tahun, df_kegiatan, uploaded_excel, poin_korektif, list_bulan_logbook):
     pdf = PDFKinerja()
     
-    # Page 1: Narrative
+    # Halaman 1: Narasi
     pdf.add_page(orientation='portrait')
     pdf.cetak_kop_surat()
     pdf.set_font('helvetica', 'B', 11)
@@ -283,25 +284,30 @@ def generate_pdf_bytes(nama_teknisi, label_periode, tahun, df_kegiatan, uploaded
         pdf.cell(0, 6, item, new_x='LMARGIN', new_y='NEXT')
         pdf.set_x(10)
 
-    # Pages: Logbook Excel (Loop Per Bulan)
+    # Halaman Logbook Excel (Bulanan/Triwulan)
     if uploaded_excel is not None:
         try:
             df_log = pd.read_excel(uploaded_excel, sheet_name='LOGBOOK', header=None)
             for bulan_item in list_bulan_logbook:
                 stamet_data, posmet_data = parse_logbook(df_log, bulan_item)
                 
+                # Hitung total aloptama (14 Stamet + 10 Posmet = 24)
+                total_aloptama = sum(1 for r in stamet_data + posmet_data if str(r[0]).strip().isdigit())
+                if total_aloptama == 0:
+                    total_aloptama = 24
+                
                 pdf.add_page(orientation='landscape')
                 pdf.cetak_kop_surat()
-                draw_logbook_page(pdf, f"STASIUN METEOROLOGI UMBU MEHANG KUNDA - BULAN {bulan_item.upper()}", stamet_data, is_posmet=False)
+                draw_logbook_page(pdf, f"STASIUN METEOROLOGI UMBU MEHANG KUNDA - BULAN {bulan_item.upper()}", stamet_data, total_aloptama, is_posmet=False)
                 
                 pdf.add_page(orientation='landscape')
                 pdf.set_y(15) 
-                draw_logbook_page(pdf, f"POS METEOROLOGI TAMBOLAKA - BULAN {bulan_item.upper()}", posmet_data, is_posmet=True)
+                draw_logbook_page(pdf, f"POS METEOROLOGI TAMBOLAKA - BULAN {bulan_item.upper()}", posmet_data, total_aloptama, is_posmet=True)
         except Exception as e:
             pdf.add_page()
             pdf.cell(0, 10, f"Error membaca sheet LOGBOOK: {e}", align='C')
 
-    # Page Dokumentasi Foto
+    # Halaman Lampiran Foto Dokumentasi
     pdf.add_page(orientation='portrait')
     pdf.set_y(15)
     pdf.set_font('helvetica', 'B', 11)
@@ -348,9 +354,23 @@ def generate_pdf_bytes(nama_teknisi, label_periode, tahun, df_kegiatan, uploaded
             pdf.multi_cell(175, 5, teks, align='C')
             
             img_y = y_start + 16
-            if pd.notna(row['foto_path']) and os.path.exists(row['foto_path']):
+            foto_path = row['foto_path']
+            
+            # FITUR ANTI-STRETCH GAMBAR MENGGUNAKAN PIL
+            if pd.notna(foto_path) and os.path.exists(foto_path):
                 try:
-                    pdf.image(row['foto_path'], x=67.5, y=img_y, w=90, h=55)
+                    with Image.open(foto_path) as img:
+                        img_w, img_h = img.size
+                    
+                    max_w, max_h = 130.0, 54.0
+                    ratio = min(max_w / img_w, max_h / img_h)
+                    fit_w = img_w * ratio
+                    fit_h = img_h * ratio
+                    
+                    fit_x = 25.0 + (175.0 - fit_w) / 2.0
+                    fit_y = img_y + (max_h - fit_h) / 2.0
+                    
+                    pdf.image(foto_path, x=fit_x, y=fit_y, w=fit_w, h=fit_h)
                 except Exception:
                     pdf.set_xy(25, img_y + 20)
                     pdf.cell(175, 6, "[Format Gambar Error / Corrupt]", align='C')
@@ -362,7 +382,7 @@ def generate_pdf_bytes(nama_teknisi, label_periode, tahun, df_kegiatan, uploaded
             
     return bytes(pdf.output())
 
-# --- STREAMLIT UI ---
+# --- ANTARMUKA STREAMLIT ---
 st.title("🛠️ Laporan & E-Kinerja Teknisi")
 
 tab1, tab2, tab3 = st.tabs(["📝 Input Kegiatan Harian", "📅 Data Kinerja (DB)", "🖨️ Cetak PDF E-Kinerja"])
@@ -426,7 +446,6 @@ with tab2:
 with tab3:
     st.subheader("Generate Dokumen E-Kinerja & Logbook")
     
-    # Selection Mode Laporan
     jenis_laporan = st.radio("Pilih Tipe Laporan:", ["Bulanan", "Triwulan"], horizontal=True)
     
     col_a, col_b, col_c = st.columns(3)
