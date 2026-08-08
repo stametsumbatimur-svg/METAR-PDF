@@ -7,3 +7,4 @@ xlsxwriter
 matplotlib
 pytz
 fpdf2
+pypdf
