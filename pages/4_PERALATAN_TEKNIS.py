@@ -803,11 +803,15 @@ def generate_pdf_bytes(nama_teknisi, label_periode, triwulan_label, tahun, df_ke
             pdf.set_y(15)
             draw_jadwal_page(pdf, name_res, nip_res, bulan_item, tahun, triwulan_label, days_dict)
 
-    # --- 4. LAMPIRAN DOKUMENTASI FOTO (LAYOUT GRID MULTI-FOTO DINAMIS) ---
+    # --- 4. LAMPIRAN DOKUMENTASI FOTO (TERURUT DINAMIS BERDASARKAN TANGGAL) ---
     for bulan_item in list_bulan_logbook:
         b_code = MONTH_MAP[bulan_item]
         df_kegiatan_bulan = df_kegiatan[df_kegiatan['tanggal'].astype(str).str.slice(5, 7) == b_code] if not df_kegiatan.empty else pd.DataFrame()
         
+        # Pastikan data diurutkan secara rinci berdasarkan tanggal ASC
+        if not df_kegiatan_bulan.empty:
+            df_kegiatan_bulan = df_kegiatan_bulan.sort_values(by=['tanggal', 'id'], ascending=[True, True])
+
         pdf.add_page(orientation='portrait')
         pdf.set_y(15)
         pdf.set_font('helvetica', 'B', 11)
@@ -838,7 +842,6 @@ def generate_pdf_bytes(nama_teknisi, label_periode, triwulan_label, tahun, df_ke
                 valid_photos = [p for p in raw_photos if pd.notna(p) and os.path.exists(p)]
                 num_photos = len(valid_photos)
                 
-                # Hitung jumlah baris foto untuk layout grid (2 kolom)
                 img_rows = 1 if num_photos <= 1 else (num_photos + 1) // 2
                 row_h = max(65, 15 + (img_rows * 48))
                 
@@ -864,7 +867,6 @@ def generate_pdf_bytes(nama_teknisi, label_periode, triwulan_label, tahun, df_ke
                 
                 if valid_photos:
                     if num_photos == 1:
-                        # 1 Foto: Posisi Tengah
                         fp = valid_photos[0]
                         try:
                             with Image.open(fp) as img:
@@ -880,7 +882,6 @@ def generate_pdf_bytes(nama_teknisi, label_periode, triwulan_label, tahun, df_ke
                             pdf.set_xy(25, img_base_y + 15)
                             pdf.cell(175, 6, "[Format Gambar Error / Corrupt]", align='C')
                     else:
-                        # > 1 Foto: Render Grid 2 Kolom
                         box_w, box_h = 82.0, 44.0
                         for p_idx, fp in enumerate(valid_photos):
                             r_idx = p_idx // 2
@@ -922,7 +923,7 @@ def generate_pdf_bytes(nama_teknisi, label_periode, triwulan_label, tahun, df_ke
 # --- STREAMLIT UI ---
 st.title("🛠️ Laporan & E-Kinerja Teknisi")
 
-tab1, tab2, tab3 = st.tabs(["📝 Input Kegiatan Harian", "📅 Data Kinerja (DB)", "🖨️ Cetak PDF E-Kinerja"])
+tab1, tab2, tab3 = st.tabs(["📝 Input Kegiatan Harian", "📅 Data Kinerja (DB & Kelola)", "🖨️ Cetak PDF E-Kinerja"])
 
 opsi_kegiatan = [
     "Pemeliharaan Taman Alat",
@@ -983,11 +984,115 @@ with tab1:
                 st.success(f"Data kegiatan berhasil disimpan! ({len(saved_paths)} foto tersimpan)")
 
 with tab2:
-    st.subheader("Arsip Kegiatan Teknisi")
+    st.subheader("Arsip & Pengelolaan Data Kegiatan Teknisi")
+    
+    # PERBAIKAN FITUR 2: QUERY SELALU DIURUTKAN SECARA OTOMATIS BERDASARKAN TANGGAL ASC
     with get_db_connection() as conn:
-        df_db = pd.read_sql("SELECT * FROM e_kinerja", conn)
+        df_db = pd.read_sql("SELECT * FROM e_kinerja ORDER BY tanggal ASC, id ASC", conn)
+        
     if not df_db.empty:
         st.dataframe(df_db, use_container_width=True)
+        st.caption("ℹ️ *Data di atas telah diurutkan secara otomatis berdasarkan kronologi tanggal.*")
+        st.markdown("---")
+        
+        # PERBAIKAN FITUR 1: FITUR EDIT DAN HAPUS DATA
+        col_act1, col_act2 = st.columns(2)
+        
+        # --- SUB-AKSI 1: EDIT DATA ---
+        with col_act1:
+            with st.expander("✏️ Edit Data Kegiatan", expanded=False):
+                list_id = df_db['id'].tolist()
+                id_selected = st.selectbox("Pilih ID Data untuk Diedit:", list_id, key="select_edit_id")
+                
+                row_edit = df_db[df_db['id'] == id_selected].iloc[0]
+                
+                with st.form("form_edit_db"):
+                    edit_tgl_val = datetime.strptime(row_edit['tanggal'], "%Y-%m-%d") if row_edit['tanggal'] else datetime.today()
+                    edit_tanggal = st.date_input("Tanggal Kegiatan", edit_tgl_val)
+                    
+                    idx_tek = teknisi_list.index(row_edit['nama_teknisi']) if row_edit['nama_teknisi'] in teknisi_list else 0
+                    edit_nama = st.selectbox("Nama Teknisi", teknisi_list, index=idx_tek)
+                    
+                    curr_keg = [k.strip() for k in str(row_edit['penjelasan_kegiatan']).split(",") if k.strip()]
+                    edit_kegiatan = st.multiselect(
+                        "Penjelasan Kegiatan", 
+                        opsi_kegiatan, 
+                        default=[k for k in curr_keg if k in opsi_kegiatan]
+                    )
+                    
+                    st.caption("Status Foto Dokumentasi:")
+                    exist_photos = parse_foto_paths(row_edit['foto_path'])
+                    st.write(f"Tersimpan {len(exist_photos)} foto.")
+                    
+                    opsi_foto = st.radio("Opsi Foto Baru:", ["Pertahankan Foto Lama", "Ganti/Tambah Foto Baru"], horizontal=True)
+                    new_edit_fotos = []
+                    if opsi_foto == "Ganti/Tambah Foto Baru":
+                        new_edit_fotos = st.file_uploader(
+                            "Upload Foto Pengganti", 
+                            type=['jpg', 'jpeg', 'png'], 
+                            accept_multiple_files=True,
+                            key="uploader_edit"
+                        )
+                        
+                    btn_submit_edit = st.form_submit_button("Simpan Perubahan Data")
+                    
+                    if btn_submit_edit:
+                        if not edit_kegiatan:
+                            st.error("Pilih minimal 1 kegiatan!")
+                        else:
+                            kegiatan_edit_str = ", ".join(edit_kegiatan)
+                            
+                            if opsi_foto == "Ganti/Tambah Foto Baru" and new_edit_fotos:
+                                # Hapus berkas lama
+                                for p in exist_photos:
+                                    if os.path.exists(p):
+                                        try: os.remove(p)
+                                        except Exception: pass
+                                
+                                saved_edit_paths = []
+                                for idx, foto in enumerate(new_edit_fotos):
+                                    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                                    fname = f"EDIT_{timestamp_str}_{idx}_{foto.name}"
+                                    file_path = os.path.join(UPLOAD_DIR, fname)
+                                    with open(file_path, "wb") as f:
+                                        f.write(foto.getbuffer())
+                                    saved_edit_paths.append(file_path)
+                                final_foto_path = json.dumps(saved_edit_paths)
+                            else:
+                                final_foto_path = row_edit['foto_path']
+                                
+                            with get_db_connection() as conn:
+                                c = conn.cursor()
+                                c.execute(
+                                    "UPDATE e_kinerja SET tanggal = ?, nama_teknisi = ?, penjelasan_kegiatan = ?, foto_path = ? WHERE id = ?",
+                                    (edit_tanggal.strftime("%Y-%m-%d"), edit_nama, kegiatan_edit_str, final_foto_path, id_selected)
+                                )
+                                conn.commit()
+                            st.success(f"Data ID {id_selected} berhasil diperbarui!")
+                            st.rerun()
+
+        # --- SUB-AKSI 2: HAPUS DATA ---
+        with col_act2:
+            with st.expander("🗑️ Hapus Data Kegiatan", expanded=False):
+                id_del_selected = st.selectbox("Pilih ID Data untuk Dihapus:", df_db['id'].tolist(), key="select_del_id")
+                row_del = df_db[df_db['id'] == id_del_selected].iloc[0]
+                
+                st.warning(f"Apakah Anda yakin ingin menghapus data ID **{id_del_selected}** ({row_del['tanggal']} - {row_del['nama_teknisi']})?")
+                
+                if st.button("Hapus Permanen Data Selected", type="primary"):
+                    # Hapus file foto terkait dari server
+                    del_photos = parse_foto_paths(row_del['foto_path'])
+                    for p in del_photos:
+                        if os.path.exists(p):
+                            try: os.remove(p)
+                            except Exception: pass
+                            
+                    with get_db_connection() as conn:
+                        c = conn.cursor()
+                        c.execute("DELETE FROM e_kinerja WHERE id = ?", (id_del_selected,))
+                        conn.commit()
+                    st.success(f"Data ID {id_del_selected} beserta foto terkait berhasil dihapus!")
+                    st.rerun()
     else:
         st.info("Belum ada data kegiatan yang diinput.")
 
@@ -1033,7 +1138,8 @@ with tab3:
                 triwulan_label = ""
                 list_bulan_logbook = [filter_bulan]
                 bulan_code = MONTH_MAP[filter_bulan]
-                query = "SELECT * FROM e_kinerja WHERE nama_teknisi = ? AND strftime('%m', tanggal) = ? AND strftime('%Y', tanggal) = ?"
+                # Query Otomatis Diurutkan berdasarkan Tanggal (ASC)
+                query = "SELECT * FROM e_kinerja WHERE nama_teknisi = ? AND strftime('%m', tanggal) = ? AND strftime('%Y', tanggal) = ? ORDER BY tanggal ASC, id ASC"
                 params = [filter_nama, bulan_code, filter_tahun]
             else:
                 q_info = QUARTER_MAP[filter_triwulan]
@@ -1041,7 +1147,8 @@ with tab3:
                 triwulan_label = q_info['label']
                 list_bulan_logbook = q_info["month_names"]
                 months_code = q_info["months"]
-                query = f"SELECT * FROM e_kinerja WHERE nama_teknisi = ? AND strftime('%m', tanggal) IN ({','.join(['?']*len(months_code))}) AND strftime('%Y', tanggal) = ?"
+                # Query Otomatis Diurutkan berdasarkan Tanggal (ASC)
+                query = f"SELECT * FROM e_kinerja WHERE nama_teknisi = ? AND strftime('%m', tanggal) IN ({','.join(['?']*len(months_code))}) AND strftime('%Y', tanggal) = ? ORDER BY tanggal ASC, id ASC"
                 params = [filter_nama] + months_code + [filter_tahun]
             
             with get_db_connection() as conn:
@@ -1081,7 +1188,6 @@ with tab3:
                         with open(final_path, "rb") as f_final:
                             output_data = f_final.read()
                     finally:
-                        # Pembersihan berkas temporer aman
                         for p in [base_path, extra_path, final_path]:
                             if p and os.path.exists(p):
                                 try:
