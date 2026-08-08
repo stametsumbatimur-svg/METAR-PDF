@@ -18,6 +18,35 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 LOGO_FILE = "logo_bmkg.png"
 DB_FILE = "kinerja_teknisi.db"
 
+MONTH_MAP = {
+    "Januari": "01", "Februari": "02", "Maret": "03", "April": "04",
+    "Mei": "05", "Juni": "06", "Juli": "07", "Agustus": "08",
+    "September": "09", "Oktober": "10", "November": "11", "Desember": "12"
+}
+
+QUARTER_MAP = {
+    "Triwulan I (Jan - Mar)": {
+        "label": "TRIWULAN I (JANUARI - MARET)",
+        "months": ["01", "02", "03"],
+        "month_names": ["Januari", "Februari", "Maret"]
+    },
+    "Triwulan II (Apr - Jun)": {
+        "label": "TRIWULAN II (APRIL - JUNI)",
+        "months": ["04", "05", "06"],
+        "month_names": ["April", "Mei", "Juni"]
+    },
+    "Triwulan III (Jul - Sep)": {
+        "label": "TRIWULAN III (JULI - SEPTEMBER)",
+        "months": ["07", "08", "09"],
+        "month_names": ["Juli", "Agustus", "September"]
+    },
+    "Triwulan IV (Okt - Des)": {
+        "label": "TRIWULAN IV (OKTOBER - DESEMBER)",
+        "months": ["10", "11", "12"],
+        "month_names": ["Oktober", "November", "Desember"]
+    }
+}
+
 # --- DATABASE HELPERS ---
 def get_db_connection():
     return sqlite3.connect(DB_FILE)
@@ -104,23 +133,9 @@ class PDFKinerja(FPDF):
         self.line(10, y_line + 1.5, self.w - 10, y_line + 1.5)
         self.set_y(y_line + 8)
 
-def draw_logbook_page(pdf, title, data_rows, is_posmet=False):
-    pdf.set_font('helvetica', 'B', 10)
-    pdf.cell(0, 6, 'LAPORAN HASIL MONITORING KONDISI PERALATAN OPERASIONAL UTAMA METEOROLOGI', align='C', new_x='LMARGIN', new_y='NEXT')
-    pdf.cell(0, 6, title, align='C', new_x='LMARGIN', new_y='NEXT')
-    pdf.ln(5)
-    
-    if not data_rows:
-        pdf.set_font('helvetica', '', 10)
-        pdf.cell(0, 6, "Data tidak ditemukan. Silakan cek format Excel / Bulan yang dipilih.", align='C')
-        return
-
+def draw_header_table(pdf, x_start, y_start, w):
     pdf.set_fill_color(220, 220, 220)
     pdf.set_font('helvetica', 'B', 8)
-    w = [8, 65, 30, 35, 16, 16, 16, 16, 25, 23] 
-    
-    x_start = 10
-    y_start = pdf.get_y()
     
     pdf.rect(x_start, y_start, w[0], 12, style='DF')
     pdf.rect(x_start+w[0], y_start, w[1], 12, style='DF')
@@ -156,8 +171,22 @@ def draw_logbook_page(pdf, title, data_rows, is_posmet=False):
     pdf.multi_cell(w[8], 4, 'Tahun\nKalibrasi', align='C')
     pdf.set_xy(x_sisa+w[8], y_start+3)
     pdf.cell(w[9], 6, 'Pengadaan', align='C')
+
+def draw_logbook_page(pdf, title, data_rows, is_posmet=False):
+    pdf.set_font('helvetica', 'B', 10)
+    pdf.cell(0, 6, 'LAPORAN HASIL MONITORING KONDISI PERALATAN OPERASIONAL UTAMA METEOROLOGI', align='C', new_x='LMARGIN', new_y='NEXT')
+    pdf.cell(0, 6, title, align='C', new_x='LMARGIN', new_y='NEXT')
+    pdf.ln(5)
     
-    pdf.set_y(y_start + 12)
+    if not data_rows:
+        pdf.set_font('helvetica', '', 10)
+        pdf.cell(0, 6, "Data tidak ditemukan. Silakan cek format Excel / Bulan yang dipilih.", align='C')
+        return
+
+    w = [8, 65, 30, 35, 16, 16, 16, 16, 25, 23]
+    draw_header_table(pdf, 10, pdf.get_y(), w)
+    
+    pdf.set_y(pdf.get_y() + 12)
     pdf.set_font('helvetica', '', 8)
     total_alat = 0
     
@@ -174,9 +203,10 @@ def draw_logbook_page(pdf, title, data_rows, is_posmet=False):
             lines = 3
         row_h = lines * 5
         
-        if pdf.get_y() + row_h > 195:
+        if pdf.get_y() + row_h > 185:
             pdf.add_page(orientation='landscape')
-            pdf.set_y(15)
+            draw_header_table(pdf, 10, 15, w)
+            pdf.set_y(27)
             
         x = 10
         y = pdf.get_y()
@@ -201,7 +231,7 @@ def draw_logbook_page(pdf, title, data_rows, is_posmet=False):
         lebar_gabungan = sum(w[:4])
         y = pdf.get_y()
         
-        if y + 6 > 195:
+        if y + 6 > 185:
             pdf.add_page(orientation='landscape')
             y = 15
             
@@ -212,7 +242,7 @@ def draw_logbook_page(pdf, title, data_rows, is_posmet=False):
         pdf.cell(w[4], 6, str(total_alat), border=0, align='C')
         pdf.set_y(y + 6)
 
-def generate_pdf_bytes(nama_teknisi, bulan, tahun, df_kegiatan, uploaded_excel, poin_korektif):
+def generate_pdf_bytes(nama_teknisi, label_periode, tahun, df_kegiatan, uploaded_excel, poin_korektif, list_bulan_logbook):
     pdf = PDFKinerja()
     
     # Page 1: Narrative
@@ -222,7 +252,7 @@ def generate_pdf_bytes(nama_teknisi, bulan, tahun, df_kegiatan, uploaded_excel, 
     pdf.cell(0, 6, 'MENINGKATNYA LAYANAN OPERASIONAL', align='C', new_x='LMARGIN', new_y='NEXT')
     pdf.cell(0, 6, 'ALOPTAMA METEOROLOGI YANG PRIMA', align='C', new_x='LMARGIN', new_y='NEXT')
     pdf.cell(0, 6, 'STASIUN METEOROLOGI KELAS III UMBU MEHANG KUNDA', align='C', new_x='LMARGIN', new_y='NEXT')
-    pdf.cell(0, 6, f'BULAN {bulan.upper()} TAHUN {tahun}', align='C', new_x='LMARGIN', new_y='NEXT')
+    pdf.cell(0, 6, f'{label_periode.upper()} TAHUN {tahun}', align='C', new_x='LMARGIN', new_y='NEXT')
     pdf.ln(8)
     
     pdf.set_font('helvetica', '', 11)
@@ -237,7 +267,7 @@ def generate_pdf_bytes(nama_teknisi, bulan, tahun, df_kegiatan, uploaded_excel, 
     pdf.ln(5)
     
     pdf.set_font('helvetica', '', 11)
-    pdf.multi_cell(0, 6, f"Sehingga hasil persentase untuk peralatan operasional pada Triwulan terkait menghasilkan nilai akurasi sebesar 100%. Adapun capaian hasil tersebut disusun dan didukung oleh laporan yang menjadi dasar pemantauan, pemeliharaan, serta evaluasi kinerja peralatan operasional utama meteorologi, yaitu sebagai berikut:")
+    pdf.multi_cell(0, 6, f"Sehingga hasil persentase untuk peralatan operasional pada periode terkait menghasilkan nilai akurasi sebesar 100%. Adapun capaian hasil tersebut disusun dan didukung oleh laporan yang menjadi dasar pemantauan, pemeliharaan, serta evaluasi kinerja peralatan operasional utama meteorologi, yaitu sebagai berikut:")
     pdf.ln(5)
     
     items = [
@@ -253,24 +283,25 @@ def generate_pdf_bytes(nama_teknisi, bulan, tahun, df_kegiatan, uploaded_excel, 
         pdf.cell(0, 6, item, new_x='LMARGIN', new_y='NEXT')
         pdf.set_x(10)
 
-    # Pages 2 & 3: Logbook Excel
+    # Pages: Logbook Excel (Loop Per Bulan)
     if uploaded_excel is not None:
         try:
             df_log = pd.read_excel(uploaded_excel, sheet_name='LOGBOOK', header=None)
-            stamet_data, posmet_data = parse_logbook(df_log, bulan)
-            
-            pdf.add_page(orientation='landscape')
-            pdf.cetak_kop_surat()
-            draw_logbook_page(pdf, "STASIUN METEOROLOGI UMBU MEHANG KUNDA", stamet_data, is_posmet=False)
-            
-            pdf.add_page(orientation='landscape')
-            pdf.set_y(15) 
-            draw_logbook_page(pdf, "POS METEOROLOGI TAMBOLAKA", posmet_data, is_posmet=True)
+            for bulan_item in list_bulan_logbook:
+                stamet_data, posmet_data = parse_logbook(df_log, bulan_item)
+                
+                pdf.add_page(orientation='landscape')
+                pdf.cetak_kop_surat()
+                draw_logbook_page(pdf, f"STASIUN METEOROLOGI UMBU MEHANG KUNDA - BULAN {bulan_item.upper()}", stamet_data, is_posmet=False)
+                
+                pdf.add_page(orientation='landscape')
+                pdf.set_y(15) 
+                draw_logbook_page(pdf, f"POS METEOROLOGI TAMBOLAKA - BULAN {bulan_item.upper()}", posmet_data, is_posmet=True)
         except Exception as e:
             pdf.add_page()
             pdf.cell(0, 10, f"Error membaca sheet LOGBOOK: {e}", align='C')
 
-    # Page 4: Photos
+    # Page Dokumentasi Foto
     pdf.add_page(orientation='portrait')
     pdf.set_y(15)
     pdf.set_font('helvetica', 'B', 11)
@@ -288,7 +319,7 @@ def generate_pdf_bytes(nama_teknisi, bulan, tahun, df_kegiatan, uploaded_excel, 
         pdf.rect(10, y_start, 15, 15)
         pdf.rect(25, y_start, 175, 15)
         pdf.set_xy(25, y_start + 4)
-        pdf.cell(175, 6, "Belum ada data dokumentasi untuk bulan ini.", align='C')
+        pdf.cell(175, 6, "Belum ada data dokumentasi untuk periode ini.", align='C')
     else:
         pdf.set_font('helvetica', '', 10)
         y_start = pdf.get_y()
@@ -298,7 +329,7 @@ def generate_pdf_bytes(nama_teknisi, bulan, tahun, df_kegiatan, uploaded_excel, 
             teks = f"Tanggal: {tgl_indo}\n{row['penjelasan_kegiatan']}"
             row_h = 75
             
-            if y_start + row_h > 280:
+            if y_start + row_h > 270:
                 pdf.add_page(orientation='portrait')
                 pdf.set_y(15)
                 pdf.set_font('helvetica', 'B', 10)
@@ -319,7 +350,7 @@ def generate_pdf_bytes(nama_teknisi, bulan, tahun, df_kegiatan, uploaded_excel, 
             img_y = y_start + 16
             if pd.notna(row['foto_path']) and os.path.exists(row['foto_path']):
                 try:
-                    pdf.image(row['foto_path'], x=67.5, y=img_y, w=90, h=55, keep_aspect_ratio=True)
+                    pdf.image(row['foto_path'], x=67.5, y=img_y, w=90, h=55)
                 except Exception:
                     pdf.set_xy(25, img_y + 20)
                     pdf.cell(175, 6, "[Format Gambar Error / Corrupt]", align='C')
@@ -329,7 +360,7 @@ def generate_pdf_bytes(nama_teknisi, bulan, tahun, df_kegiatan, uploaded_excel, 
                 
             y_start += row_h
             
-    return pdf.output()
+    return bytes(pdf.output())
 
 # --- STREAMLIT UI ---
 st.title("🛠️ Laporan & E-Kinerja Teknisi")
@@ -395,11 +426,21 @@ with tab2:
 with tab3:
     st.subheader("Generate Dokumen E-Kinerja & Logbook")
     
+    # Selection Mode Laporan
+    jenis_laporan = st.radio("Pilih Tipe Laporan:", ["Bulanan", "Triwulan"], horizontal=True)
+    
     col_a, col_b, col_c = st.columns(3)
     with col_a:
         filter_nama = st.selectbox("Pilih Teknisi", teknisi_list)
+    
     with col_b:
-        filter_bulan = st.selectbox("Pilih Bulan", ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"])
+        if jenis_laporan == "Bulanan":
+            filter_bulan = st.selectbox("Pilih Bulan", list(MONTH_MAP.keys()))
+            filter_triwulan = None
+        else:
+            filter_triwulan = st.selectbox("Pilih Triwulan", list(QUARTER_MAP.keys()))
+            filter_bulan = None
+
     with col_c:
         filter_tahun = st.selectbox("Pilih Tahun", ["2026", "2027", "2028"])
         
@@ -420,21 +461,39 @@ with tab3:
         if uploaded_excel is None:
             st.error("Silakan unggah File Excel terlebih dahulu untuk menarik Logbook!")
         else:
-            bulan_dict = {"Januari":"01", "Februari":"02", "Maret":"03", "April":"04", "Mei":"05", "Juni":"06", "Juli":"07", "Agustus":"08", "September":"09", "Oktober":"10", "November":"11", "Desember":"12"}
-            bulan_angka = bulan_dict[filter_bulan]
+            if jenis_laporan == "Bulanan":
+                label_periode = f"BULAN {filter_bulan.upper()}"
+                list_bulan_logbook = [filter_bulan]
+                bulan_code = MONTH_MAP[filter_bulan]
+                query = "SELECT * FROM e_kinerja WHERE nama_teknisi = ? AND strftime('%m', tanggal) = ? AND strftime('%Y', tanggal) = ?"
+                params = [filter_nama, bulan_code, filter_tahun]
+            else:
+                q_info = QUARTER_MAP[filter_triwulan]
+                label_periode = q_info["label"]
+                list_bulan_logbook = q_info["month_names"]
+                months_code = q_info["months"]
+                query = f"SELECT * FROM e_kinerja WHERE nama_teknisi = ? AND strftime('%m', tanggal) IN ({','.join(['?']*len(months_code))}) AND strftime('%Y', tanggal) = ?"
+                params = [filter_nama] + months_code + [filter_tahun]
             
-            query = "SELECT * FROM e_kinerja WHERE nama_teknisi = ? AND strftime('%m', tanggal) = ? AND strftime('%Y', tanggal) = ?"
             with get_db_connection() as conn:
-                df_filter = pd.read_sql(query, conn, params=[filter_nama, bulan_angka, filter_tahun])
+                df_filter = pd.read_sql(query, conn, params=params)
             
             with st.spinner('Menyusun Logbook & Memformat Tabel Lampiran...'):
-                pdf_bytes = generate_pdf_bytes(filter_nama, filter_bulan, filter_tahun, df_filter, uploaded_excel, poin_korektif)
+                pdf_bytes = generate_pdf_bytes(
+                    filter_nama, 
+                    label_periode, 
+                    filter_tahun, 
+                    df_filter, 
+                    uploaded_excel, 
+                    poin_korektif, 
+                    list_bulan_logbook
+                )
                 
                 if PYPDF_INSTALLED and pdf_kalibrasi is not None:
                     merger = PdfWriter()
                     
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f_base:
-                        f_base.write(bytes(pdf_bytes))
+                        f_base.write(pdf_bytes)
                         base_path = f_base.name
 
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f_extra:
@@ -455,9 +514,9 @@ with tab3:
                     os.remove(extra_path)
                     os.remove(final_path)
                 else:
-                    output_data = bytes(pdf_bytes)
+                    output_data = pdf_bytes
 
-            filename = f"E_Kinerja_{filter_nama.replace(' ', '_')}_{filter_bulan}_{filter_tahun}.pdf"
+            filename = f"E_Kinerja_{filter_nama.replace(' ', '_')}_{jenis_laporan}_{filter_tahun}.pdf"
             st.success("✅ Dokumen PDF E-Kinerja berhasil dibuat!")
             st.download_button(
                 label="⬇️ Download Hasil PDF E-Kinerja",
