@@ -19,28 +19,34 @@ BULAN_INDO = {
 }
 
 # ==========================================
-# ======= METAR CONVERTER FUNCTIONS ========
+# ===== METAR & SPECI PARSER FUNCTIONS =====
 # ==========================================
-def parse_metar(sandi_str):
+def parse_metar_speci(sandi_str):
     if pd.isna(sandi_str):
         return None
     sandi_str = sandi_str.replace('\n', ' ').replace('\r', '').strip()
     
-    start_idx = sandi_str.find('METAR')
-    if start_idx == -1:
+    # Deteksi jenis sandi (METAR atau SPECI)
+    report_type = None
+    if 'METAR' in sandi_str:
+        report_type = 'METAR'
+    elif 'SPECI' in sandi_str:
+        report_type = 'SPECI'
+    else:
         return None
         
-    metar_core = sandi_str[start_idx:].replace('=', '').strip()
-    tokens = metar_core.split()
+    start_idx = sandi_str.find(report_type)
+    core_str = sandi_str[start_idx:].replace('=', '').strip()
+    tokens = core_str.split()
     
-    metar, loc, time_str, wind, vis, wx, cloud, t_dp, qnh, rmk = "METAR", "NIL", "NIL", "NIL", "NIL", "NIL", "NIL", "NIL", "NIL", "NOSIG"
+    header_title, loc, time_str, wind, vis, wx, cloud, t_dp, qnh, rmk = report_type, "NIL", "NIL", "NIL", "NIL", "NIL", "NIL", "NIL", "NIL", "NOSIG"
     
     is_cor = False
     cc_type = ""
     remaining_tokens = []
     
     for t in tokens:
-        if t == 'METAR': continue
+        if t in ['METAR', 'SPECI']: continue
         elif t == 'COR':
             is_cor = True
             continue
@@ -78,7 +84,7 @@ def parse_metar(sandi_str):
         if cloud_list:
             cloud = " ".join(cloud_list)
             
-    return [metar, loc, time_str, wind, vis, wx, cloud, t_dp, qnh, rmk, is_cor, cc_type]
+    return [header_title, loc, time_str, wind, vis, wx, cloud, t_dp, qnh, rmk, is_cor, cc_type]
 
 def calculate_priority(row):
     score = 0
@@ -88,7 +94,7 @@ def calculate_priority(row):
         score = max(score, 2 + char_code)
     return score
 
-def generate_pdf_bytes_metar(df_clean, logo_path):
+def generate_pdf_bytes_metar_speci(df_clean, logo_path, report_type="METAR"):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=75, topMargin=25, bottomMargin=25)
     story = []
@@ -104,7 +110,7 @@ def generate_pdf_bytes_metar(df_clean, logo_path):
             
         nama_bulan = BULAN_INDO[date.month]
         tanggal_format = f"{date.day:02d} {nama_bulan} {date.year}"
-        judul_rekap = f"REKAP DATA METAR: {tanggal_format}".upper()
+        judul_rekap = f"REKAP DATA {report_type}: {tanggal_format}".upper()
         text_block = [
             Paragraph("<b>BALAI BESAR METEOROLOGI KLIMATOLOGI DAN GEOFISIKA WILAYAH III</b>", header_text_style),
             Paragraph(f"<b>{nama_stasiun}</b>", header_text_style),
@@ -112,14 +118,13 @@ def generate_pdf_bytes_metar(df_clean, logo_path):
             Paragraph(f"<b>{judul_rekap}</b>", header_text_style)
         ]
         
-        # PERBAIKAN: Menambah lebar colWidths menjadi 430 & Menghapus padding sel
         if logo_path and os.path.exists(logo_path):
             logo_img = Image(logo_path, width=48, height=48)
             header_table = Table([[logo_img, text_block, ""]], colWidths=[50, 430, 20])
             header_table.setStyle(TableStyle([
                 ('VALIGN', (0,0), (-1,-1), 'MIDDLE'), ('ALIGN', (0,0), (0,0), 'CENTER'), ('ALIGN', (1,0), (1,0), 'CENTER'),
                 ('BOTTOMPADDING', (0,0), (-1,-1), 6), ('TOPPADDING', (0,0), (-1,-1), 0), ('LINEBELOW', (0,0), (-1,-1), 1.5, colors.black),
-                ('LEFTPADDING', (1,0), (1,0), 0), ('RIGHTPADDING', (1,0), (1,0), 0) # Trik agar teks bebas ruang penuh
+                ('LEFTPADDING', (1,0), (1,0), 0), ('RIGHTPADDING', (1,0), (1,0), 0)
             ]))
         else:
             header_table = Table([[text_block]], colWidths=[500])
@@ -131,7 +136,7 @@ def generate_pdf_bytes_metar(df_clean, logo_path):
         story.append(header_table)
         story.append(Spacer(1, 10))
         
-        headers = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK']
+        headers = [report_type, 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK']
         table_data = [headers]
         
         base_table_style = [
@@ -143,10 +148,10 @@ def generate_pdf_bytes_metar(df_clean, logo_path):
         for idx, row in group.iterrows():
             current_row_idx = len(table_data)
             if row['VIS'] == 'CAVOK':
-                row_data = [str(row['METAR']), str(row['LOC']), str(row['TIME']), str(row['WIND']), 'CAVOK', '', '', str(row['T/DP']), str(row['QNH']), str(row['RMK'])]
+                row_data = [str(row['TYPE']), str(row['LOC']), str(row['TIME']), str(row['WIND']), 'CAVOK', '', '', str(row['T/DP']), str(row['QNH']), str(row['RMK'])]
                 base_table_style.append(('SPAN', (4, current_row_idx), (6, current_row_idx)))
             else:
-                row_data = [str(row[h]) for h in headers]
+                row_data = [str(row['TYPE']), str(row['LOC']), str(row['TIME']), str(row['WIND']), str(row['VIS']), str(row['WX']), str(row['CLOUD']), str(row['T/DP']), str(row['QNH']), str(row['RMK'])]
             table_data.append(row_data)
             
         col_widths = [40, 35, 50, 65, 35, 35, 90, 40, 45, 55] 
@@ -158,16 +163,18 @@ def generate_pdf_bytes_metar(df_clean, logo_path):
     buffer.seek(0)
     return buffer
 
-def generate_excel_bytes_metar(df_clean):
+def generate_excel_bytes_metar_speci(df_clean, report_type="METAR"):
     buffer = io.BytesIO()
-    headers = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK', 'datetime']
+    headers = ['TYPE', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK', 'datetime']
     df_export = df_clean[headers].copy()
+    df_export.rename(columns={'TYPE': report_type}, inplace=True)
     df_export['datetime'] = df_export['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S')
     
+    sheet_title = f"Rekap {report_type}"
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        df_export.to_excel(writer, sheet_name='Rekap METAR', index=False)
+        df_export.to_excel(writer, sheet_name=sheet_title, index=False)
         workbook = writer.book
-        worksheet = writer.sheets['Rekap METAR']
+        worksheet = writer.sheets[sheet_title]
         header_font = Font(name='Segoe UI', size=11, bold=True, color='FFFFFF')
         header_fill = PatternFill(start_color='1F4E78', end_color='1F4E78', fill_type='solid')
         align_center, align_left = Alignment(horizontal='center', vertical='center'), Alignment(horizontal='left', vertical='center')
@@ -180,7 +187,7 @@ def generate_excel_bytes_metar(df_clean):
             for cell in row:
                 cell.border, cell.font = thin_border, Font(name='Segoe UI', size=10)
                 col_header = worksheet.cell(row=1, column=cell.column).value
-                cell.alignment = align_center if col_header in ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'T/DP', 'QNH'] else align_left
+                cell.alignment = align_center if col_header in [report_type, 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'T/DP', 'QNH'] else align_left
         
         for col in worksheet.columns:
             max_len = max([len(str(cell.value)) for cell in col if cell.value] + [0])
@@ -238,7 +245,6 @@ def generate_pdf_bytes_wxrev(df_clean, logo_path):
     ]
     
     total_width = 500  
-    # PERBAIKAN: Menambah lebar colWidths dan Menghapus padding sel 
     if logo_path and os.path.exists(logo_path):
         logo_img = Image(logo_path, width=48, height=48)
         header_table = Table([[logo_img, text_block, ""]], colWidths=[50, 430, 20])
@@ -338,9 +344,9 @@ st.set_page_config(page_title="BMKG Data Generator", layout="centered")
 
 # --- SIDEBAR MENU ---
 st.sidebar.title("🎛️ Navigasi Menu")
-menu = st.sidebar.radio("Pilih Converter", ["METAR Converter", "WXREV Converter"])
+menu = st.sidebar.radio("Pilih Converter", ["METAR Converter", "SPECI Converter", "WXREV Converter"])
 st.sidebar.markdown("---")
-st.sidebar.info("Aplikasi ekstraksi data Sandi Cuaca (METAR & WXREV) menjadi Laporan PDF & Excel otomatis.")
+st.sidebar.info("Aplikasi ekstraksi data Sandi Cuaca (METAR, SPECI & WXREV) menjadi Laporan PDF & Excel otomatis.")
 
 LOGO_FILE = "logo_bmkg.png"
 
@@ -369,39 +375,108 @@ if menu == "METAR Converter":
                 with st.spinner("Sedang memvalidasi data METAR..."):
                     parsed_rows = []
                     for idx, row in df.iterrows():
-                        res = parse_metar(row['sandi'])
-                        if res:
+                        res = parse_metar_speci(row['sandi'])
+                        if res and res[0] == 'METAR':
                             station = row['station_name'] if 'station_name' in df.columns else "STASIUN METEOROLOGI"
                             msg_id = row['id'] if 'id' in df.columns else idx
                             parsed_rows.append(res + [row['data_timestamp'], station, msg_id])
                             
-                    columns = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK', 'is_cor', 'cc_type', 'raw_timestamp', 'station_name', 'msg_id']
+                    columns = ['TYPE', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK', 'is_cor', 'cc_type', 'raw_timestamp', 'station_name', 'msg_id']
                     df_clean = pd.DataFrame(parsed_rows, columns=columns)
                     
-                    df_clean['raw_timestamp'] = df_clean['raw_timestamp'].str.replace(" +0000 UTC", "", regex=False)
-                    df_clean['datetime'] = pd.to_datetime(df_clean['raw_timestamp'])
-                    
-                    df_clean = df_clean[df_clean['datetime'].dt.minute == 0]
-                    df_clean['priority_score'] = df_clean.apply(calculate_priority, axis=1)
-                    df_clean = df_clean.sort_values(by=['datetime', 'priority_score', 'msg_id'])
-                    df_clean = df_clean.drop_duplicates(subset=['datetime'], keep='last')
-                    
-                    df_clean['date_group'] = df_clean['datetime'].dt.date
-                    df_clean = df_clean.sort_values(by='datetime').reset_index(drop=True)
+                    if df_clean.empty:
+                        st.warning("Tidak ditemukan data METAR di dalam file ini.")
+                    else:
+                        df_clean['raw_timestamp'] = df_clean['raw_timestamp'].str.replace(" +0000 UTC", "", regex=False)
+                        df_clean['datetime'] = pd.to_datetime(df_clean['raw_timestamp'])
+                        
+                        # METAR difilter khusus jam genap (:00)
+                        df_clean = df_clean[df_clean['datetime'].dt.minute == 0]
+                        df_clean['priority_score'] = df_clean.apply(calculate_priority, axis=1)
+                        df_clean = df_clean.sort_values(by=['datetime', 'priority_score', 'msg_id'])
+                        df_clean = df_clean.drop_duplicates(subset=['datetime'], keep='last')
+                        
+                        df_clean['date_group'] = df_clean['datetime'].dt.date
+                        df_clean = df_clean.sort_values(by='datetime').reset_index(drop=True)
+                        
+                        if df_clean.empty:
+                            st.warning("Tidak ditemukan data METAR dengan menit :00 (per jam) di dalam file ini.")
+                        else:
+                            st.success(f"Berhasil memproses data METAR!")
+                            
+                            pdf_data = generate_pdf_bytes_metar_speci(df_clean, LOGO_FILE, report_type="METAR")
+                            excel_data = generate_excel_bytes_metar_speci(df_clean, report_type="METAR")
+                            
+                            first_date = df_clean['date_group'].iloc[0]
+                            nama_file_base = f"REKAP_METAR_{first_date.day:02d}_{BULAN_INDO[first_date.month]}_{first_date.year}"
+                            
+                            st.write("---")
+                            st.subheader("Unduh Laporan METAR")
+                            
+                            col_pdf, col_xlsx = st.columns(2)
+                            with col_pdf:
+                                st.download_button(label="📥 Download PDF", data=pdf_data, file_name=f"{nama_file_base}.pdf", mime="application/pdf")
+                            with col_xlsx:
+                                st.download_button(label="📊 Download Excel", data=excel_data, file_name=f"{nama_file_base}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                                
+        except Exception as e:
+            st.error(f"Terjadi kesalahan: {e}")
+
+# --- HALAMAN SPECI ---
+elif menu == "SPECI Converter":
+    st.title("🛩️ SPECI to PDF & Excel Converter")
+
+    with st.expander("ℹ️ Klik di sini untuk melihat Petunjuk Penggunaan"):
+        st.markdown("""
+        **Syarat File CSV:**
+        - File hasil extract dari "https://bmkgsatu.bmkg.go.id/extractgts" data SPECI dengan status SENT.
+        """)
+
+    uploaded_file = st.file_uploader("Upload file CSV SPECI", type=["csv"])
+
+    if uploaded_file is not None:
+        try:
+            df = pd.read_csv(uploaded_file)
+            
+            if 'sandi' not in df.columns or 'data_timestamp' not in df.columns:
+                st.error("Format CSV tidak sesuai! Pastikan terdapat kolom 'sandi' dan 'data_timestamp'.")
+            else:
+                with st.spinner("Sedang memvalidasi data SPECI..."):
+                    parsed_rows = []
+                    for idx, row in df.iterrows():
+                        res = parse_metar_speci(row['sandi'])
+                        if res and res[0] == 'SPECI':
+                            station = row['station_name'] if 'station_name' in df.columns else "STASIUN METEOROLOGI"
+                            msg_id = row['id'] if 'id' in df.columns else idx
+                            parsed_rows.append(res + [row['data_timestamp'], station, msg_id])
+                            
+                    columns = ['TYPE', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK', 'is_cor', 'cc_type', 'raw_timestamp', 'station_name', 'msg_id']
+                    df_clean = pd.DataFrame(parsed_rows, columns=columns)
                     
                     if df_clean.empty:
-                        st.warning("Tidak ditemukan data METAR dengan menit :00 (per jam) di dalam file ini.")
+                        st.warning("Tidak ditemukan data SPECI di dalam file ini.")
                     else:
-                        st.success(f"Berhasil memproses data METAR!")
+                        df_clean['raw_timestamp'] = df_clean['raw_timestamp'].str.replace(" +0000 UTC", "", regex=False)
+                        df_clean['datetime'] = pd.to_datetime(df_clean['raw_timestamp'])
                         
-                        pdf_data = generate_pdf_bytes_metar(df_clean, LOGO_FILE)
-                        excel_data = generate_excel_bytes_metar(df_clean)
+                        # SPECI TIDAK difilter berdasarkan menit :00
+                        df_clean['priority_score'] = df_clean.apply(calculate_priority, axis=1)
+                        df_clean = df_clean.sort_values(by=['datetime', 'priority_score', 'msg_id'])
+                        df_clean = df_clean.drop_duplicates(subset=['datetime'], keep='last')
+                        
+                        df_clean['date_group'] = df_clean['datetime'].dt.date
+                        df_clean = df_clean.sort_values(by='datetime').reset_index(drop=True)
+                        
+                        st.success(f"Berhasil memproses {len(df_clean)} data SPECI!")
+                        
+                        pdf_data = generate_pdf_bytes_metar_speci(df_clean, LOGO_FILE, report_type="SPECI")
+                        excel_data = generate_excel_bytes_metar_speci(df_clean, report_type="SPECI")
                         
                         first_date = df_clean['date_group'].iloc[0]
-                        nama_file_base = f"REKAP_METAR_{first_date.day:02d}_{BULAN_INDO[first_date.month]}_{first_date.year}"
+                        nama_file_base = f"REKAP_SPECI_{first_date.day:02d}_{BULAN_INDO[first_date.month]}_{first_date.year}"
                         
                         st.write("---")
-                        st.subheader("Unduh Laporan METAR")
+                        st.subheader("Unduh Laporan SPECI")
                         
                         col_pdf, col_xlsx = st.columns(2)
                         with col_pdf:
@@ -448,7 +523,6 @@ elif menu == "WXREV Converter":
                         df_wxrev['raw_timestamp'] = df_wxrev['raw_timestamp'].str.replace(" +0000 UTC", "", regex=False)
                         df_wxrev['datetime'] = pd.to_datetime(df_wxrev['raw_timestamp'])
                         
-                        # Sorting data berdasarkan tanggal dan hapus duplikat di hari yang sama
                         df_wxrev = df_wxrev.sort_values(by='datetime')
                         df_wxrev = df_wxrev.drop_duplicates(subset=['TGL'], keep='last')
                         df_wxrev = df_wxrev.sort_values(by='TGL').reset_index(drop=True)
