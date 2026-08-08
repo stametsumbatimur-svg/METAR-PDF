@@ -27,22 +27,22 @@ MONTH_MAP = {
 
 QUARTER_MAP = {
     "Triwulan I (Jan - Mar)": {
-        "label": "TRIWULAN I (JANUARI - MARET)",
+        "label": "TRIWULAN I",
         "months": ["01", "02", "03"],
         "month_names": ["Januari", "Februari", "Maret"]
     },
     "Triwulan II (Apr - Jun)": {
-        "label": "TRIWULAN II (APRIL - JUNI)",
+        "label": "TRIWULAN II",
         "months": ["04", "05", "06"],
         "month_names": ["April", "Mei", "Juni"]
     },
     "Triwulan III (Jul - Sep)": {
-        "label": "TRIWULAN III (JULI - SEPTEMBER)",
+        "label": "TRIWULAN III",
         "months": ["07", "08", "09"],
         "month_names": ["Juli", "Agustus", "September"]
     },
     "Triwulan IV (Okt - Des)": {
-        "label": "TRIWULAN IV (OKTOBER - DESEMBER)",
+        "label": "TRIWULAN IV",
         "months": ["10", "11", "12"],
         "month_names": ["Oktober", "November", "Desember"]
     }
@@ -78,7 +78,7 @@ def format_tanggal_indo(tanggal_str):
     except Exception:
         return tanggal_str
 
-# --- PARSER EXCEL LOGBOOK ---
+# --- PARSER LOGBOOK EXCEL ---
 def parse_logbook(df_log, bulan):
     bulan_str = f"BULAN {bulan.upper()}"
     stamet_data, posmet_data = [], []
@@ -109,12 +109,46 @@ def parse_logbook(df_log, bulan):
                 
     return stamet_data, posmet_data
 
+# --- PARSER JADWAL PEMELIHARAAN EXCEL ---
+def parse_jadwal(df_jadwal, nama_teknisi, bulan_nama):
+    bulan_target = f"BULAN : {bulan_nama.upper()}"
+    idx_bulan = df_jadwal[df_jadwal[2].astype(str).str.strip().str.upper() == bulan_target].index.tolist()
+    
+    if not idx_bulan:
+        for col in range(3):
+            matches = df_jadwal[df_jadwal[col].astype(str).str.strip().str.upper().str.contains(bulan_nama.upper())].index.tolist()
+            if matches:
+                idx_bulan = matches
+                break
+                
+    if not idx_bulan:
+        return nama_teknisi, "", {}
+
+    start_idx = idx_bulan[0]
+    nip = ""
+    jadwal_days = {}
+    
+    for i in range(start_idx, min(start_idx + 35, len(df_jadwal))):
+        val_col1 = str(df_jadwal.iloc[i, 1]).strip()
+        if nama_teknisi.upper() in val_col1.upper() or val_col1.upper() in nama_teknisi.upper():
+            nip_val = str(df_jadwal.iloc[i+1, 1]).strip() if i+1 < len(df_jadwal) else ""
+            if nip_val.isdigit():
+                nip = nip_val
+            
+            for day in range(1, 32):
+                col_idx = day + 1
+                if col_idx < df_jadwal.shape[1]:
+                    val = str(df_jadwal.iloc[i, col_idx]).strip()
+                    jadwal_days[day] = val if val.lower() != 'nan' else ""
+            break
+            
+    return nama_teknisi, nip, jadwal_days
+
 # --- CLASS GENERATOR PDF ---
 class PDFKinerja(FPDF):
     def cetak_kop_surat(self):
         y_awal = self.get_y()
         if os.path.exists(LOGO_FILE):
-            # Logo presisi: lebar 17mm, rasio tinggi otomatis
             self.image(LOGO_FILE, x=14, y=y_awal + 1, w=17)
             
         self.set_y(y_awal)
@@ -226,7 +260,6 @@ def draw_logbook_page(pdf, title, data_rows, total_alat_keseluruhan=24, is_posme
             
         pdf.set_xy(10, y + row_h)
 
-    # Menampilkan total resmi 24 unit Aloptama pada akhir Posmet
     if is_posmet:
         pdf.set_font('helvetica', 'B', 8)
         lebar_gabungan = sum(w[:4])
@@ -243,10 +276,105 @@ def draw_logbook_page(pdf, title, data_rows, total_alat_keseluruhan=24, is_posme
         pdf.cell(w[4], 6, str(total_alat_keseluruhan), border=0, align='C')
         pdf.set_y(y + 6)
 
-def generate_pdf_bytes(nama_teknisi, label_periode, tahun, df_kegiatan, uploaded_excel, poin_korektif, list_bulan_logbook):
+def draw_jadwal_page(pdf, nama_teknisi, nip, bulan_nama, tahun, triwulan_label, days_dict):
+    pdf.set_font('helvetica', 'B', 11)
+    pdf.cell(0, 5, 'JADWAL PEMELIHARAAN', align='C', new_x='LMARGIN', new_y='NEXT')
+    pdf.cell(0, 5, 'STASIUN METEOROLOGI UMBU MEHANG KUNDA', align='C', new_x='LMARGIN', new_y='NEXT')
+    pdf.cell(0, 5, f'TAHUN : {tahun}', align='C', new_x='LMARGIN', new_y='NEXT')
+    if triwulan_label:
+        pdf.cell(0, 5, f'{triwulan_label.upper()}', align='C', new_x='LMARGIN', new_y='NEXT')
+    pdf.cell(0, 5, f'BULAN : {bulan_nama.upper()}', align='C', new_x='LMARGIN', new_y='NEXT')
+    pdf.ln(4)
+    
+    w_name = 60
+    w_day = 7
+    
+    y_hdr = pdf.get_y()
+    pdf.set_font('helvetica', 'B', 8)
+    pdf.set_fill_color(220, 220, 220)
+    
+    pdf.rect(10, y_hdr, w_name, 10, style='DF')
+    pdf.rect(10 + w_name, y_hdr, w_day * 31, 5, style='DF')
+    
+    pdf.set_xy(10, y_hdr + 1)
+    pdf.cell(w_name, 4, 'NAMA PEGAWAI', align='C')
+    pdf.set_xy(10 + w_name, y_hdr + 0.5)
+    pdf.cell(w_day * 31, 4, 'TANGGAL', align='C')
+    
+    pdf.rect(10 + w_name, y_hdr + 5, w_day * 31, 5, style='DF')
+    for d in range(1, 32):
+        x_d = 10 + w_name + (d - 1) * w_day
+        pdf.rect(x_d, y_hdr + 5, w_day, 5, style='DF')
+        pdf.set_xy(x_d, y_hdr + 5.5)
+        pdf.cell(w_day, 4, str(d), align='C')
+        
+    y_data = y_hdr + 10
+    row_h = 7
+    
+    pdf.rect(10, y_data, w_name, row_h)
+    pdf.set_xy(10, y_data + 1.5)
+    pdf.set_font('helvetica', 'B', 7)
+    pdf.cell(w_name, 4, nama_teknisi, align='L')
+    
+    pdf.set_font('helvetica', '', 6)
+    for d in range(1, 32):
+        x_d = 10 + w_name + (d - 1) * w_day
+        pdf.rect(x_d, y_data, w_day, row_h)
+        val = days_dict.get(d, '')
+        pdf.set_xy(x_d, y_data + 1.5)
+        pdf.cell(w_day, 4, val, align='C')
+        
+    y_nip = y_data + row_h
+    pdf.rect(10, y_nip, w_name, row_h)
+    pdf.set_xy(10, y_nip + 1.5)
+    pdf.set_font('helvetica', '', 7)
+    pdf.cell(w_name, 4, f"NIP. {nip}" if nip else "", align='L')
+    
+    for d in range(1, 32):
+        x_d = 10 + w_name + (d - 1) * w_day
+        pdf.rect(x_d, y_nip, w_day, row_h)
+        
+    pdf.set_y(y_nip + row_h + 8)
+    y_sec = pdf.get_y()
+    
+    pdf.set_font('helvetica', 'B', 8)
+    pdf.set_xy(10, y_sec)
+    pdf.cell(40, 4, 'KETERANGAN:', new_x='LMARGIN', new_y='NEXT')
+    
+    legenda = [
+        ("O", "= Pemeliharaan Taman Alat"),
+        ("D", "= Pemeliharaan Display Bandara"),
+        ("A", "= Pemeliharaan AWOS"),
+        ("DL", "= Pengolahan OLA dan SLA"),
+        ("G", "= Pembuatan Gas")
+    ]
+    
+    for kode, ket in legenda:
+        pdf.set_x(10)
+        pdf.set_font('helvetica', 'B', 8)
+        pdf.cell(8, 4, kode, align='L')
+        pdf.set_font('helvetica', '', 8)
+        pdf.cell(60, 4, ket, new_x='LMARGIN', new_y='NEXT')
+        
+    pdf.set_xy(200, y_sec)
+    pdf.set_font('helvetica', '', 9)
+    pdf.cell(80, 4, f'Waingapu, 31 {bulan_nama} {tahun}', align='C', new_x='LMARGIN', new_y='NEXT')
+    pdf.set_x(200)
+    pdf.cell(80, 4, 'Kepala Stasiun Meteorologi', align='C', new_x='LMARGIN', new_y='NEXT')
+    pdf.set_x(200)
+    pdf.cell(80, 4, 'Umbu Mehang Kunda', align='C', new_x='LMARGIN', new_y='NEXT')
+    pdf.ln(18)
+    pdf.set_x(200)
+    pdf.set_font('helvetica', 'BU', 9)
+    pdf.cell(80, 4, 'Carles Alexander Tari, S.TP', align='C', new_x='LMARGIN', new_y='NEXT')
+    pdf.set_x(200)
+    pdf.set_font('helvetica', '', 9)
+    pdf.cell(80, 4, 'NIP. 197712082001121001', align='C', new_x='LMARGIN', new_y='NEXT')
+
+def generate_pdf_bytes(nama_teknisi, label_periode, triwulan_label, tahun, df_kegiatan, uploaded_excel, poin_korektif, list_bulan_logbook):
     pdf = PDFKinerja()
     
-    # Halaman 1: Narasi
+    # --- 1. KOVER BERKOP REKAPITULASI ---
     pdf.add_page(orientation='portrait')
     pdf.cetak_kop_surat()
     pdf.set_font('helvetica', 'B', 11)
@@ -284,14 +412,18 @@ def generate_pdf_bytes(nama_teknisi, label_periode, tahun, df_kegiatan, uploaded
         pdf.cell(0, 6, item, new_x='LMARGIN', new_y='NEXT')
         pdf.set_x(10)
 
-    # Halaman Logbook Excel (Bulanan/Triwulan)
+    # --- 2. LOGBOOK EXCEL ---
+    df_jadwal_sheet = None
     if uploaded_excel is not None:
         try:
             df_log = pd.read_excel(uploaded_excel, sheet_name='LOGBOOK', header=None)
+            try:
+                df_jadwal_sheet = pd.read_excel(uploaded_excel, sheet_name='JADWAL 2026', header=None)
+            except Exception:
+                df_jadwal_sheet = None
+
             for bulan_item in list_bulan_logbook:
                 stamet_data, posmet_data = parse_logbook(df_log, bulan_item)
-                
-                # Hitung total aloptama (14 Stamet + 10 Posmet = 24)
                 total_aloptama = sum(1 for r in stamet_data + posmet_data if str(r[0]).strip().isdigit())
                 if total_aloptama == 0:
                     total_aloptama = 24
@@ -307,7 +439,15 @@ def generate_pdf_bytes(nama_teknisi, label_periode, tahun, df_kegiatan, uploaded
             pdf.add_page()
             pdf.cell(0, 10, f"Error membaca sheet LOGBOOK: {e}", align='C')
 
-    # Halaman Lampiran Foto Dokumentasi
+    # --- 3. JADWAL PEMELIHARAAN ---
+    if df_jadwal_sheet is not None:
+        for bulan_item in list_bulan_logbook:
+            name_res, nip_res, days_dict = parse_jadwal(df_jadwal_sheet, nama_teknisi, bulan_item)
+            pdf.add_page(orientation='landscape')
+            pdf.cetak_kop_surat()
+            draw_jadwal_page(pdf, name_res, nip_res, bulan_item, tahun, triwulan_label, days_dict)
+
+    # --- 4. LAMPIRAN DOKUMENTASI FOTO ---
     pdf.add_page(orientation='portrait')
     pdf.set_y(15)
     pdf.set_font('helvetica', 'B', 11)
@@ -356,7 +496,6 @@ def generate_pdf_bytes(nama_teknisi, label_periode, tahun, df_kegiatan, uploaded
             img_y = y_start + 16
             foto_path = row['foto_path']
             
-            # FITUR ANTI-STRETCH GAMBAR MENGGUNAKAN PIL
             if pd.notna(foto_path) and os.path.exists(foto_path):
                 try:
                     with Image.open(foto_path) as img:
@@ -382,7 +521,7 @@ def generate_pdf_bytes(nama_teknisi, label_periode, tahun, df_kegiatan, uploaded
             
     return bytes(pdf.output())
 
-# --- ANTARMUKA STREAMLIT ---
+# --- STREAMLIT UI ---
 st.title("🛠️ Laporan & E-Kinerja Teknisi")
 
 tab1, tab2, tab3 = st.tabs(["📝 Input Kegiatan Harian", "📅 Data Kinerja (DB)", "🖨️ Cetak PDF E-Kinerja"])
@@ -482,13 +621,15 @@ with tab3:
         else:
             if jenis_laporan == "Bulanan":
                 label_periode = f"BULAN {filter_bulan.upper()}"
+                triwulan_label = ""
                 list_bulan_logbook = [filter_bulan]
                 bulan_code = MONTH_MAP[filter_bulan]
                 query = "SELECT * FROM e_kinerja WHERE nama_teknisi = ? AND strftime('%m', tanggal) = ? AND strftime('%Y', tanggal) = ?"
                 params = [filter_nama, bulan_code, filter_tahun]
             else:
                 q_info = QUARTER_MAP[filter_triwulan]
-                label_periode = q_info["label"]
+                label_periode = f"{q_info['label']} ({q_info['month_names'][0].upper()} - {q_info['month_names'][-1].upper()})"
+                triwulan_label = q_info['label']
                 list_bulan_logbook = q_info["month_names"]
                 months_code = q_info["months"]
                 query = f"SELECT * FROM e_kinerja WHERE nama_teknisi = ? AND strftime('%m', tanggal) IN ({','.join(['?']*len(months_code))}) AND strftime('%Y', tanggal) = ?"
@@ -497,10 +638,11 @@ with tab3:
             with get_db_connection() as conn:
                 df_filter = pd.read_sql(query, conn, params=params)
             
-            with st.spinner('Menyusun Logbook & Memformat Tabel Lampiran...'):
+            with st.spinner('Menyusun Logbook, Jadwal, & Memformat PDF...'):
                 pdf_bytes = generate_pdf_bytes(
                     filter_nama, 
                     label_periode, 
+                    triwulan_label,
                     filter_tahun, 
                     df_filter, 
                     uploaded_excel, 
@@ -536,7 +678,7 @@ with tab3:
                     output_data = pdf_bytes
 
             filename = f"E_Kinerja_{filter_nama.replace(' ', '_')}_{jenis_laporan}_{filter_tahun}.pdf"
-            st.success("✅ Dokumen PDF E-Kinerja berhasil dibuat!")
+            st.success("✅ Dokumen PDF E-Kinerja & Jadwal Pemeliharaan berhasil dibuat!")
             st.download_button(
                 label="⬇️ Download Hasil PDF E-Kinerja",
                 data=output_data,
