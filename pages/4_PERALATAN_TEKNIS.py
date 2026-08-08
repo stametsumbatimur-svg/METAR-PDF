@@ -4,6 +4,8 @@ import sqlite3
 import os
 import tempfile
 import re
+import json
+import calendar
 from datetime import datetime
 from PIL import Image
 from fpdf import FPDF
@@ -14,7 +16,14 @@ try:
 except ImportError:
     PYPDF_INSTALLED = False
 
-# --- KONFIGURASI AWAL ---
+# --- KONFIGURASI METADATA STASIUN & PEJABAT ---
+STATION_NAME = "STASIUN METEOROLOGI KELAS III UMBU MEHANG KUNDA"
+HEAD_OF_STATION_NAME = "Carles Alexander Tari, S.TP"
+HEAD_OF_STATION_NIP = "197712082001121001"
+STATION_CITY = "Waingapu"
+DEFAULT_ALAT_COUNT = 24
+
+# --- KONFIGURASI FILE & FOLDER ---
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 LOGO_FILE = "logo_bmkg.png"
@@ -51,11 +60,11 @@ QUARTER_MAP = {
 
 # --- PALET WARNA JADWAL PEMELIHARAAN ---
 COLOR_MAP_JADWAL = {
-    "O": (169, 223, 191),   # Hijau Muda - Pemeliharaan Taman Alat
-    "D": (174, 214, 241),   # Biru Muda - Pemeliharaan Display Bandara
-    "A": (249, 231, 159),   # Kuning Muda - Pemeliharaan AWOS
-    "DL": (210, 180, 222),  # Ungu Muda - Pengolahan OLA & SLA
-    "G": (248, 196, 113)    # Oranye Muda - Pembuatan Gas
+    "O": (169, 223, 191),   # Hijau Muda
+    "D": (174, 214, 241),   # Biru Muda
+    "A": (249, 231, 159),   # Kuning Muda
+    "DL": (210, 180, 222),  # Ungu Muda
+    "G": (248, 196, 113)    # Oranye Muda
 }
 
 # --- HELPER PEWARNAAN KATEGORI OLA SLA ---
@@ -71,11 +80,35 @@ def get_percentage_color(val):
         return (255, 255, 255)
 
     if v >= 100.0:
-        return (169, 223, 191)  # Hijau (100%)
+        return (169, 223, 191)
     elif v >= 80.0:
-        return (249, 231, 159)  # Kuning (80% - 99.9%)
+        return (249, 231, 159)
     else:
-        return (241, 148, 138)  # Merah (< 80%)
+        return (241, 148, 138)
+
+# --- HELPER PENANGGALAN DINAMIS ---
+def get_last_day_of_month(bulan_nama, tahun):
+    try:
+        m = int(MONTH_MAP.get(bulan_nama, "01"))
+        y = int(tahun)
+        _, last_day = calendar.monthrange(y, m)
+        return last_day
+    except Exception:
+        return 31
+
+def parse_foto_paths(foto_path_val):
+    """Mendukung format lama (string tunggal/koma) & format baru (JSON list)"""
+    if not foto_path_val or pd.isna(foto_path_val):
+        return []
+    fstr = str(foto_path_val).strip()
+    if fstr.startswith("["):
+        try:
+            return json.loads(fstr)
+        except Exception:
+            pass
+    if "," in fstr:
+        return [p.strip() for p in fstr.split(",") if p.strip()]
+    return [fstr]
 
 # --- HELPER DATABASE ---
 def get_db_connection():
@@ -138,7 +171,7 @@ def parse_logbook(df_log, bulan):
                 
     return stamet_data, posmet_data
 
-# --- PARSER JADWAL PEMELIHARAAN EXCEL (REVISED & BULLETPROOF) ---
+# --- PARSER JADWAL PEMELIHARAAN EXCEL ---
 def parse_jadwal(df_jadwal, nama_teknisi, bulan_nama):
     def clean_text(s):
         return re.sub(r'[,.\-\s]+', ' ', str(s)).upper().strip()
@@ -152,7 +185,6 @@ def parse_jadwal(df_jadwal, nama_teknisi, bulan_nama):
 
     target_words = get_name_keywords(nama_teknisi)
 
-    # 1. Isolasi Baris Header Bulan Spesifik (Misal: "BULAN : JANUARI")
     month_row = -1
     for r in range(len(df_jadwal)):
         row_str = " ".join([str(val).strip().upper() for val in df_jadwal.iloc[r].values if pd.notna(val)])
@@ -170,7 +202,6 @@ def parse_jadwal(df_jadwal, nama_teknisi, bulan_nama):
     if month_row == -1:
         return nama_teknisi, "", {}
 
-    # 2. Tentukan Batas Akhir Blok Bulan Ini (Mencegah Pencarian Bocor ke Bulan Lain)
     next_month_row = len(df_jadwal)
     other_months = [m.upper() for m in MONTH_MAP.keys() if m.upper() != bulan_nama.upper()]
     for r in range(month_row + 1, len(df_jadwal)):
@@ -179,7 +210,6 @@ def parse_jadwal(df_jadwal, nama_teknisi, bulan_nama):
             next_month_row = r
             break
 
-    # 3. Deteksi Posisi Kolom Tanggal (1-31) Secara Dinamis
     day_col_map = {}
     for r in range(month_row, min(month_row + 10, next_month_row)):
         row_vals = [str(val).strip() for val in df_jadwal.iloc[r].values]
@@ -196,7 +226,6 @@ def parse_jadwal(df_jadwal, nama_teknisi, bulan_nama):
         for d in range(1, 32):
             day_col_map[d] = d + 1
 
-    # 4. Cari Baris Teknisi Hanya di Dalam Rentang Blok Bulan Terkait
     tech_row = -1
     for r in range(month_row, next_month_row):
         for c in range(min(5, df_jadwal.shape[1])):
@@ -215,7 +244,6 @@ def parse_jadwal(df_jadwal, nama_teknisi, bulan_nama):
     if tech_row == -1:
         return nama_teknisi, "", {}
 
-    # 5. Ekstraksi NIP Teknisi
     nip = ""
     for r_nip in range(tech_row, min(tech_row + 3, next_month_row)):
         for c_nip in range(min(5, df_jadwal.shape[1])):
@@ -227,7 +255,6 @@ def parse_jadwal(df_jadwal, nama_teknisi, bulan_nama):
         if nip:
             break
 
-    # 6. Ekstraksi Kode Pemeliharaan Per Tanggal
     jadwal_days = {}
     for d in range(1, 32):
         if d in day_col_map:
@@ -293,7 +320,7 @@ class PDFKinerja(FPDF):
         self.set_font('helvetica', 'B', 13)
         self.cell(0, 5, 'BADAN METEOROLOGI, KLIMATOLOGI, DAN GEOFISIKA', align='C', ln=1)
         self.set_font('helvetica', 'B', 11)
-        self.cell(0, 5, 'STASIUN METEOROLOGI KELAS III UMBU MEHANG KUNDA', align='C', ln=1)
+        self.cell(0, 5, STATION_NAME, align='C', ln=1)
         
         self.set_font('helvetica', '', 9)
         self.cell(0, 4, 'Jl. Adi Sucipto, Waingapu, Sumba Timur', align='C', ln=1)
@@ -346,7 +373,7 @@ def draw_header_table(pdf, x_start, y_start, w):
     pdf.set_xy(x_sisa+w[8], y_start+3)
     pdf.cell(w[9], 6, 'Pengadaan', align='C')
 
-def draw_logbook_page(pdf, title, data_rows, total_alat_keseluruhan=24, is_posmet=False):
+def draw_logbook_page(pdf, title, data_rows, total_alat_keseluruhan=DEFAULT_ALAT_COUNT, is_posmet=False):
     pdf.set_font('helvetica', 'B', 10)
     pdf.cell(0, 6, 'LAPORAN HASIL MONITORING KONDISI PERALATAN OPERASIONAL UTAMA METEOROLOGI', align='C', ln=1)
     pdf.cell(0, 6, title, align='C', ln=1)
@@ -459,7 +486,6 @@ def draw_jadwal_page(pdf, nama_teknisi, nip, bulan_nama, tahun, triwulan_label, 
     pdf.set_font('helvetica', '', 7)
     pdf.cell(w_name, 4, f"NIP. {nip}" if nip else "", align='L')
     
-    # --- RENDER TANGGAL JADWAL DENGAN MULTI-WARNA BAGI SEL ---
     pdf.set_font('helvetica', 'B', 6.5)
     for d in range(1, 32):
         x_d = 10 + w_name + (d - 1) * w_day
@@ -511,9 +537,10 @@ def draw_jadwal_page(pdf, nama_teknisi, nip, bulan_nama, tahun, triwulan_label, 
         pdf.set_font('helvetica', '', 8)
         pdf.cell(60, 4, ket, ln=1)
         
+    last_day = get_last_day_of_month(bulan_nama, tahun)
     pdf.set_xy(200, y_sec)
     pdf.set_font('helvetica', '', 9)
-    pdf.cell(80, 4, f'Waingapu, 31 {bulan_nama} {tahun}', align='C', ln=1)
+    pdf.cell(80, 4, f'{STATION_CITY}, {last_day} {bulan_nama} {tahun}', align='C', ln=1)
     pdf.set_x(200)
     pdf.cell(80, 4, 'Kepala Stasiun Meteorologi', align='C', ln=1)
     pdf.set_x(200)
@@ -521,10 +548,10 @@ def draw_jadwal_page(pdf, nama_teknisi, nip, bulan_nama, tahun, triwulan_label, 
     pdf.ln(18)
     pdf.set_x(200)
     pdf.set_font('helvetica', 'BU', 9)
-    pdf.cell(80, 4, 'Carles Alexander Tari, S.TP', align='C', ln=1)
+    pdf.cell(80, 4, HEAD_OF_STATION_NAME, align='C', ln=1)
     pdf.set_x(200)
     pdf.set_font('helvetica', '', 9)
-    pdf.cell(80, 4, 'NIP. 197712082001121001', align='C', ln=1)
+    pdf.cell(80, 4, f'NIP. {HEAD_OF_STATION_NIP}', align='C', ln=1)
 
 def draw_olasla_page(pdf, ola_data, nama_teknisi, nip_teknisi, tahun):
     if not ola_data:
@@ -536,7 +563,7 @@ def draw_olasla_page(pdf, ola_data, nama_teknisi, nip_teknisi, tahun):
     
     pdf.set_font('helvetica', 'B', 10)
     pdf.cell(0, 5, 'MONITORING HARIAN KONDISI AWOS KAT.I DAN AWS STRENGTHENING', align='C', ln=1)
-    pdf.cell(0, 5, 'STASIUN METEOROLOGI KELAS III UMBU MEHANG KUNDA', align='C', ln=1)
+    pdf.cell(0, 5, STATION_NAME, align='C', ln=1)
     pdf.cell(0, 5, f'TAHUN {tahun}', align='C', ln=1)
     pdf.cell(0, 5, f'{bulan_nama.upper()}', align='C', ln=1)
     pdf.ln(4)
@@ -574,7 +601,6 @@ def draw_olasla_page(pdf, ola_data, nama_teknisi, nip_teknisi, tahun):
     items = [ola_data['item1'], ola_data['item2']]
     
     for item in items:
-        # --- ROW STATUS ---
         pdf.rect(10, y_data, w_no, row_h)
         pdf.set_xy(10, y_data + 1)
         pdf.set_font('helvetica', 'B', 7)
@@ -618,7 +644,6 @@ def draw_olasla_page(pdf, ola_data, nama_teknisi, nip_teknisi, tahun):
         
         y_data += row_h
         
-        # --- ROW DATA ---
         pdf.rect(10, y_data, w_no, row_h)
         pdf.rect(10 + w_no, y_data, w_kode, row_h)
         pdf.set_xy(10 + w_no, y_data + 1)
@@ -664,14 +689,15 @@ def draw_olasla_page(pdf, ola_data, nama_teknisi, nip_teknisi, tahun):
     pdf.ln(14)
     pdf.set_x(20)
     pdf.set_font('helvetica', 'BU', 8)
-    pdf.cell(80, 4, 'Carles Alexander Tari, S.TP', ln=1)
+    pdf.cell(80, 4, HEAD_OF_STATION_NAME, ln=1)
     pdf.set_x(20)
     pdf.set_font('helvetica', '', 8)
-    pdf.cell(80, 4, 'NIP. 197712082001121001', ln=1)
+    pdf.cell(80, 4, f'NIP. {HEAD_OF_STATION_NIP}', ln=1)
     
+    last_day = get_last_day_of_month(bulan_nama, tahun)
     pdf.set_xy(200, y_sec)
     pdf.set_font('helvetica', '', 8)
-    pdf.cell(80, 4, f'Waingapu, 31 {bulan_nama} {tahun}', align='C', ln=1)
+    pdf.cell(80, 4, f'{STATION_CITY}, {last_day} {bulan_nama} {tahun}', align='C', ln=1)
     pdf.set_x(200)
     pdf.cell(80, 4, 'Teknisi', align='C', ln=1)
     pdf.ln(14)
@@ -691,23 +717,23 @@ def generate_pdf_bytes(nama_teknisi, label_periode, triwulan_label, tahun, df_ke
     pdf.set_font('helvetica', 'B', 11)
     pdf.cell(0, 6, 'MENINGKATNYA LAYANAN OPERASIONAL', align='C', ln=1)
     pdf.cell(0, 6, 'ALOPTAMA METEOROLOGI YANG PRIMA', align='C', ln=1)
-    pdf.cell(0, 6, 'STASIUN METEOROLOGI KELAS III UMBU MEHANG KUNDA', align='C', ln=1)
+    pdf.cell(0, 6, STATION_NAME, align='C', ln=1)
     pdf.cell(0, 6, f'{label_periode.upper()} TAHUN {tahun}', align='C', ln=1)
     pdf.ln(8)
     
     pdf.set_font('helvetica', '', 11)
-    pdf.multi_cell(0, 6, "Persentase Alat Operasional Utama Meteorologi yang Laik Operasi dengan Target 97% di Stasiun Meteorologi Kelas III Umbu Mehang Kunda diperoleh menggunakan formula perhitungan sebagai berikut:")
+    pdf.multi_cell(0, 6, f"Persentase Alat Operasional Utama Meteorologi yang Laik Operasi dengan Target 97% di {STATION_NAME} diperoleh menggunakan formula perhitungan sebagai berikut:")
     pdf.ln(5)
     
     pdf.set_font('helvetica', 'I', 11)
     pdf.cell(0, 6, "Laik Operasi Aloptama MET = (Jumlah aloptama meteorologi yg terpelihara / Jumlah Aloptama meteorologi) x 100%", align='C', ln=1)
     pdf.ln(3)
     pdf.set_font('helvetica', 'B', 11)
-    pdf.cell(0, 6, "Laik Operasi Aloptama MET = 24/24 x 100%", align='C', ln=1)
+    pdf.cell(0, 6, f"Laik Operasi Aloptama MET = {DEFAULT_ALAT_COUNT}/{DEFAULT_ALAT_COUNT} x 100%", align='C', ln=1)
     pdf.ln(5)
     
     pdf.set_font('helvetica', '', 11)
-    pdf.multi_cell(0, 6, f"Sehingga hasil persentase untuk peralatan operasional pada periode terkait menghasilkan nilai akurasi sebesar 100%. Adapun capaian hasil tersebut disusun dan didukung oleh laporan yang menjadi dasar pemantauan, pemeliharaan, serta evaluasi kinerja peralatan operasional utama meteorologi, yaitu sebagai berikut:")
+    pdf.multi_cell(0, 6, "Sehingga hasil persentase untuk peralatan operasional pada periode terkait menghasilkan nilai akurasi sebesar 100%. Adapun capaian hasil tersebut disusun dan didukung oleh laporan yang menjadi dasar pemantauan, pemeliharaan, serta evaluasi kinerja peralatan operasional utama meteorologi, yaitu sebagai berikut:")
     pdf.ln(5)
     
     items = [
@@ -755,7 +781,7 @@ def generate_pdf_bytes(nama_teknisi, label_periode, triwulan_label, tahun, df_ke
             stamet_data, posmet_data = parse_logbook(df_log, bulan_item)
             total_aloptama = sum(1 for r in stamet_data + posmet_data if str(r[0]).strip().isdigit())
             if total_aloptama == 0:
-                total_aloptama = 24
+                total_aloptama = DEFAULT_ALAT_COUNT
             
             pdf.add_page(orientation='landscape')
             pdf.cetak_kop_surat()
@@ -767,7 +793,7 @@ def generate_pdf_bytes(nama_teknisi, label_periode, triwulan_label, tahun, df_ke
 
     nip_teknisi_dinamis = ""
 
-    # --- 3. JADWAL PEMELIHARAAN (TANPA KOP SURAT) ---
+    # --- 3. JADWAL PEMELIHARAAN ---
     if df_jadwal_sheet is not None:
         for bulan_item in list_bulan_logbook:
             name_res, nip_res, days_dict = parse_jadwal(df_jadwal_sheet, nama_teknisi, bulan_item)
@@ -777,7 +803,7 @@ def generate_pdf_bytes(nama_teknisi, label_periode, triwulan_label, tahun, df_ke
             pdf.set_y(15)
             draw_jadwal_page(pdf, name_res, nip_res, bulan_item, tahun, triwulan_label, days_dict)
 
-    # --- 4. LAMPIRAN DOKUMENTASI FOTO ---
+    # --- 4. LAMPIRAN DOKUMENTASI FOTO (LAYOUT GRID MULTI-FOTO DINAMIS) ---
     for bulan_item in list_bulan_logbook:
         b_code = MONTH_MAP[bulan_item]
         df_kegiatan_bulan = df_kegiatan[df_kegiatan['tanggal'].astype(str).str.slice(5, 7) == b_code] if not df_kegiatan.empty else pd.DataFrame()
@@ -807,7 +833,14 @@ def generate_pdf_bytes(nama_teknisi, label_periode, triwulan_label, tahun, df_ke
             for idx, (_, row) in enumerate(df_kegiatan_bulan.iterrows(), 1):
                 tgl_indo = format_tanggal_indo(row['tanggal'])
                 teks = f"Tanggal: {tgl_indo}\n{row['penjelasan_kegiatan']}"
-                row_h = 75
+                
+                raw_photos = parse_foto_paths(row.get('foto_path'))
+                valid_photos = [p for p in raw_photos if pd.notna(p) and os.path.exists(p)]
+                num_photos = len(valid_photos)
+                
+                # Hitung jumlah baris foto untuk layout grid (2 kolom)
+                img_rows = 1 if num_photos <= 1 else (num_photos + 1) // 2
+                row_h = max(65, 15 + (img_rows * 48))
                 
                 if y_start + row_h > 270:
                     pdf.add_page(orientation='portrait')
@@ -824,36 +857,56 @@ def generate_pdf_bytes(nama_teknisi, label_periode, triwulan_label, tahun, df_ke
                 pdf.set_xy(10, y_start + (row_h/2) - 3)
                 pdf.cell(15, 6, str(idx), align='C')
                 
-                pdf.set_xy(25, y_start + 4)
+                pdf.set_xy(25, y_start + 3)
                 pdf.multi_cell(175, 5, teks, align='C')
                 
-                img_y = y_start + 16
-                foto_path = row['foto_path']
+                img_base_y = y_start + 15
                 
-                if pd.notna(foto_path) and os.path.exists(foto_path):
-                    try:
-                        with Image.open(foto_path) as img:
-                            img_w, img_h = img.size
-                        
-                        max_w, max_h = 130.0, 54.0
-                        ratio = min(max_w / img_w, max_h / img_h)
-                        fit_w = img_w * ratio
-                        fit_h = img_h * ratio
-                        
-                        fit_x = 25.0 + (175.0 - fit_w) / 2.0
-                        fit_y = img_y + (max_h - fit_h) / 2.0
-                        
-                        pdf.image(foto_path, x=fit_x, y=fit_y, w=fit_w, h=fit_h)
-                    except Exception:
-                        pdf.set_xy(25, img_y + 20)
-                        pdf.cell(175, 6, "[Format Gambar Error / Corrupt]", align='C')
+                if valid_photos:
+                    if num_photos == 1:
+                        # 1 Foto: Posisi Tengah
+                        fp = valid_photos[0]
+                        try:
+                            with Image.open(fp) as img:
+                                img_w, img_h = img.size
+                            max_w, max_h = 130.0, 45.0
+                            ratio = min(max_w / img_w, max_h / img_h)
+                            fit_w = img_w * ratio
+                            fit_h = img_h * ratio
+                            fit_x = 25.0 + (175.0 - fit_w) / 2.0
+                            fit_y = img_base_y + (max_h - fit_h) / 2.0
+                            pdf.image(fp, x=fit_x, y=fit_y, w=fit_w, h=fit_h)
+                        except Exception:
+                            pdf.set_xy(25, img_base_y + 15)
+                            pdf.cell(175, 6, "[Format Gambar Error / Corrupt]", align='C')
+                    else:
+                        # > 1 Foto: Render Grid 2 Kolom
+                        box_w, box_h = 82.0, 44.0
+                        for p_idx, fp in enumerate(valid_photos):
+                            r_idx = p_idx // 2
+                            c_idx = p_idx % 2
+                            x_pos = 28.0 + c_idx * (box_w + 5.0)
+                            y_pos = img_base_y + r_idx * (box_h + 4.0)
+                            
+                            try:
+                                with Image.open(fp) as img:
+                                    img_w, img_h = img.size
+                                ratio = min(box_w / img_w, box_h / img_h)
+                                fit_w = img_w * ratio
+                                fit_h = img_h * ratio
+                                fit_x = x_pos + (box_w - fit_w) / 2.0
+                                fit_y = y_pos + (box_h - fit_h) / 2.0
+                                pdf.image(fp, x=fit_x, y=fit_y, w=fit_w, h=fit_h)
+                            except Exception:
+                                pdf.set_xy(x_pos, y_pos + 15)
+                                pdf.cell(box_w, 6, "[Format Gambar Error]", align='C')
                 else:
-                    pdf.set_xy(25, img_y + 20)
+                    pdf.set_xy(25, img_base_y + 15)
                     pdf.cell(175, 6, "[Tidak Ada Gambar Diunggah]", align='C')
                     
-                y_start += row_h
+                y_start += row_h + 3
 
-    # --- 5. OLA SLA (TANPA KOP SURAT) ---
+    # --- 5. OLA SLA ---
     if df_ola_sheet is not None:
         for bulan_item in list_bulan_logbook:
             ola_data = parse_olasla(df_ola_sheet, bulan_item)
@@ -895,7 +948,11 @@ with tab1:
         with col2:
             kegiatan_dipilih = st.multiselect("Penjelasan Kegiatan", opsi_kegiatan)
             
-        foto = st.file_uploader("Upload Foto Dokumentasi", type=['jpg', 'jpeg', 'png'])
+        fotos = st.file_uploader(
+            "Upload Foto Dokumentasi (Bisa Pilih Banyak Foto)", 
+            type=['jpg', 'jpeg', 'png'], 
+            accept_multiple_files=True
+        )
         submit = st.form_submit_button("Simpan Data")
         
         if submit:
@@ -903,20 +960,27 @@ with tab1:
                 st.error("Silakan pilih minimal satu Penjelasan Kegiatan!")
             else:
                 kegiatan_str = ", ".join(kegiatan_dipilih) 
-                file_path = None
-                if foto is not None:
-                    file_path = os.path.join(UPLOAD_DIR, f"{datetime.now().timestamp()}_{foto.name}")
-                    with open(file_path, "wb") as f:
-                        f.write(foto.getbuffer())
+                saved_paths = []
+                
+                if fotos:
+                    for idx, foto in enumerate(fotos):
+                        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                        fname = f"{timestamp_str}_{idx}_{foto.name}"
+                        file_path = os.path.join(UPLOAD_DIR, fname)
+                        with open(file_path, "wb") as f:
+                            f.write(foto.getbuffer())
+                        saved_paths.append(file_path)
                     
+                foto_db_val = json.dumps(saved_paths) if saved_paths else ""
+                
                 with get_db_connection() as conn:
                     c = conn.cursor()
                     c.execute(
                         "INSERT INTO e_kinerja (tanggal, nama_teknisi, penjelasan_kegiatan, foto_path) VALUES (?, ?, ?, ?)",
-                        (tanggal.strftime("%Y-%m-%d"), nama, kegiatan_str, file_path)
+                        (tanggal.strftime("%Y-%m-%d"), nama, kegiatan_str, foto_db_val)
                     )
                     conn.commit()
-                st.success("Data kegiatan berhasil disimpan ke database!")
+                st.success(f"Data kegiatan berhasil disimpan! ({len(saved_paths)} foto tersimpan)")
 
 with tab2:
     st.subheader("Arsip Kegiatan Teknisi")
@@ -997,28 +1061,33 @@ with tab3:
                 
                 if PYPDF_INSTALLED and pdf_kalibrasi is not None:
                     merger = PdfWriter()
-                    
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f_base:
-                        f_base.write(pdf_bytes)
-                        base_path = f_base.name
+                    base_path = extra_path = final_path = None
+                    try:
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f_base:
+                            f_base.write(pdf_bytes)
+                            base_path = f_base.name
 
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f_extra:
-                        f_extra.write(pdf_kalibrasi.getbuffer())
-                        extra_path = f_extra.name
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f_extra:
+                            f_extra.write(pdf_kalibrasi.getbuffer())
+                            extra_path = f_extra.name
 
-                    merger.append(base_path)
-                    merger.append(extra_path)
-                    
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f_out:
-                        merger.write(f_out)
-                        final_path = f_out.name
+                        merger.append(base_path)
+                        merger.append(extra_path)
+                        
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f_out:
+                            merger.write(f_out)
+                            final_path = f_out.name
 
-                    with open(final_path, "rb") as f_final:
-                        output_data = f_final.read()
-
-                    os.remove(base_path)
-                    os.remove(extra_path)
-                    os.remove(final_path)
+                        with open(final_path, "rb") as f_final:
+                            output_data = f_final.read()
+                    finally:
+                        # Pembersihan berkas temporer aman
+                        for p in [base_path, extra_path, final_path]:
+                            if p and os.path.exists(p):
+                                try:
+                                    os.remove(p)
+                                except Exception:
+                                    pass
                 else:
                     output_data = pdf_bytes
 
