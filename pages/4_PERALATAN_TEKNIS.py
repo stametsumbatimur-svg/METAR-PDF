@@ -3,6 +3,7 @@ import pandas as pd
 import sqlite3
 import os
 import tempfile
+import re
 from datetime import datetime
 from PIL import Image
 from fpdf import FPDF
@@ -67,7 +68,7 @@ def get_percentage_color(val):
             v = v * 100.0
         v = round(v, 2)
     except (ValueError, TypeError):
-        return (255, 255, 255) # Putih untuk data kosong/invalid
+        return (255, 255, 255)
 
     if v >= 100.0:
         return (169, 223, 191)  # Hijau (100%)
@@ -137,39 +138,106 @@ def parse_logbook(df_log, bulan):
                 
     return stamet_data, posmet_data
 
-# --- PARSER JADWAL PEMELIHARAAN EXCEL ---
+# --- PARSER JADWAL PEMELIHARAAN EXCEL (REVISED & BULLETPROOF) ---
 def parse_jadwal(df_jadwal, nama_teknisi, bulan_nama):
-    bulan_target = f"BULAN : {bulan_nama.upper()}"
-    idx_bulan = df_jadwal[df_jadwal[2].astype(str).str.strip().str.upper() == bulan_target].index.tolist()
-    
-    if not idx_bulan:
-        for col in range(3):
-            matches = df_jadwal[df_jadwal[col].astype(str).str.strip().str.upper().str.contains(bulan_nama.upper())].index.tolist()
-            if matches:
-                idx_bulan = matches
+    def clean_text(s):
+        return re.sub(r'[,.\-\s]+', ' ', str(s)).upper().strip()
+
+    def get_name_keywords(n):
+        clean = clean_text(n)
+        titles = ['S TR INST', 'S TR', 'S KOM', 'S TP', 'M T', 'ST', 'A MD']
+        for t in titles:
+            clean = clean.replace(t, '')
+        return [w for w in clean.split() if len(w) > 2]
+
+    target_words = get_name_keywords(nama_teknisi)
+
+    # 1. Isolasi Baris Header Bulan Spesifik (Misal: "BULAN : JANUARI")
+    month_row = -1
+    for r in range(len(df_jadwal)):
+        row_str = " ".join([str(val).strip().upper() for val in df_jadwal.iloc[r].values if pd.notna(val)])
+        if "BULAN" in row_str and bulan_nama.upper() in row_str and len(row_str) < 60:
+            month_row = r
+            break
+
+    if month_row == -1:
+        for r in range(len(df_jadwal)):
+            row_str = " ".join([str(val).strip().upper() for val in df_jadwal.iloc[r].values if pd.notna(val)])
+            if bulan_nama.upper() in row_str and ("JADWAL" in row_str or "TAHUN" in row_str or "BULAN" in row_str):
+                month_row = r
                 break
-                
-    if not idx_bulan:
+
+    if month_row == -1:
         return nama_teknisi, "", {}
 
-    start_idx = idx_bulan[0]
-    nip = ""
-    jadwal_days = {}
-    
-    for i in range(start_idx, min(start_idx + 35, len(df_jadwal))):
-        val_col1 = str(df_jadwal.iloc[i, 1]).strip()
-        if nama_teknisi.upper() in val_col1.upper() or val_col1.upper() in nama_teknisi.upper():
-            nip_val = str(df_jadwal.iloc[i+1, 1]).strip() if i+1 < len(df_jadwal) else ""
-            if nip_val.isdigit():
-                nip = nip_val
-            
-            for day in range(1, 32):
-                col_idx = day + 1
-                if col_idx < df_jadwal.shape[1]:
-                    val = str(df_jadwal.iloc[i, col_idx]).strip()
-                    jadwal_days[day] = val if val.lower() != 'nan' else ""
+    # 2. Tentukan Batas Akhir Blok Bulan Ini (Mencegah Pencarian Bocor ke Bulan Lain)
+    next_month_row = len(df_jadwal)
+    other_months = [m.upper() for m in MONTH_MAP.keys() if m.upper() != bulan_nama.upper()]
+    for r in range(month_row + 1, len(df_jadwal)):
+        row_str = " ".join([str(val).strip().upper() for val in df_jadwal.iloc[r].values if pd.notna(val)])
+        if "BULAN" in row_str and any(m in row_str for m in other_months):
+            next_month_row = r
             break
-            
+
+    # 3. Deteksi Posisi Kolom Tanggal (1-31) Secara Dinamis
+    day_col_map = {}
+    for r in range(month_row, min(month_row + 10, next_month_row)):
+        row_vals = [str(val).strip() for val in df_jadwal.iloc[r].values]
+        if '1' in row_vals and '2' in row_vals:
+            for col_idx, val in enumerate(row_vals):
+                val_clean = str(val).split('.')[0].strip()
+                if val_clean.isdigit():
+                    d = int(val_clean)
+                    if 1 <= d <= 31 and d not in day_col_map:
+                        day_col_map[d] = col_idx
+            break
+
+    if not day_col_map:
+        for d in range(1, 32):
+            day_col_map[d] = d + 1
+
+    # 4. Cari Baris Teknisi Hanya di Dalam Rentang Blok Bulan Terkait
+    tech_row = -1
+    for r in range(month_row, next_month_row):
+        for c in range(min(5, df_jadwal.shape[1])):
+            cell_val = str(df_jadwal.iloc[r, c])
+            if pd.notna(cell_val) and cell_val.strip().lower() != 'nan':
+                cell_words = get_name_keywords(cell_val)
+                if len(target_words) >= 2 and all(w in cell_words for w in target_words):
+                    tech_row = r
+                    break
+                elif len(target_words) == 1 and target_words[0] in cell_words:
+                    tech_row = r
+                    break
+        if tech_row != -1:
+            break
+
+    if tech_row == -1:
+        return nama_teknisi, "", {}
+
+    # 5. Ekstraksi NIP Teknisi
+    nip = ""
+    for r_nip in range(tech_row, min(tech_row + 3, next_month_row)):
+        for c_nip in range(min(5, df_jadwal.shape[1])):
+            val_nip = str(df_jadwal.iloc[r_nip, c_nip])
+            digits = re.sub(r'\D', '', val_nip)
+            if len(digits) >= 12:
+                nip = digits
+                break
+        if nip:
+            break
+
+    # 6. Ekstraksi Kode Pemeliharaan Per Tanggal
+    jadwal_days = {}
+    for d in range(1, 32):
+        if d in day_col_map:
+            c_idx = day_col_map[d]
+            if c_idx < df_jadwal.shape[1]:
+                val = str(df_jadwal.iloc[tech_row, c_idx]).strip()
+                jadwal_days[d] = val if val.lower() != 'nan' else ""
+        else:
+            jadwal_days[d] = ""
+
     return nama_teknisi, nip, jadwal_days
 
 # --- HELPER PARSER ITEM OLA SLA ---
@@ -408,7 +476,7 @@ def draw_jadwal_page(pdf, nama_teknisi, nip, bulan_nama, tahun, triwulan_label, 
                 r, g, b = COLOR_MAP_JADWAL[tok]
                 pdf.set_fill_color(r, g, b)
                 pdf.rect(x_d + (idx * sub_w), y_data, sub_w, total_row_h, style='DF')
-            pdf.rect(x_d, y_data, w_day, total_row_h) # Frame luar
+            pdf.rect(x_d, y_data, w_day, total_row_h)
         else:
             pdf.rect(x_d, y_data, w_day, total_row_h)
             
@@ -528,10 +596,10 @@ def draw_olasla_page(pdf, ola_data, nama_teknisi, nip_teknisi, tahun):
             st_val = str(item['status_days'][d-1] if d-1 < len(item['status_days']) else '').strip().upper()
             
             if st_val == "ON":
-                pdf.set_fill_color(169, 223, 191) # Hijau
+                pdf.set_fill_color(169, 223, 191)
                 pdf.rect(x_d, y_data, w_day, row_h, style='DF')
             elif st_val == "OFF":
-                pdf.set_fill_color(241, 148, 138) # Merah
+                pdf.set_fill_color(241, 148, 138)
                 pdf.rect(x_d, y_data, w_day, row_h, style='DF')
             else:
                 pdf.rect(x_d, y_data, w_day, row_h)
@@ -539,7 +607,6 @@ def draw_olasla_page(pdf, ola_data, nama_teknisi, nip_teknisi, tahun):
             pdf.set_xy(x_d, y_data + 1)
             pdf.cell(w_day, 4, st_val, align='C')
             
-        # Akumulasi Status
         acc_st = item['status_accum']
         r, g, b = get_percentage_color(acc_st)
         pdf.set_fill_color(r, g, b)
@@ -551,7 +618,7 @@ def draw_olasla_page(pdf, ola_data, nama_teknisi, nip_teknisi, tahun):
         
         y_data += row_h
         
-        # --- ROW DATA (RASIO TERSEDIA) ---
+        # --- ROW DATA ---
         pdf.rect(10, y_data, w_no, row_h)
         pdf.rect(10 + w_no, y_data, w_kode, row_h)
         pdf.set_xy(10 + w_no, y_data + 1)
@@ -575,7 +642,6 @@ def draw_olasla_page(pdf, ola_data, nama_teknisi, nip_teknisi, tahun):
             pdf.set_xy(x_d, y_data + 1)
             pdf.cell(w_day, 4, str(dt_str), align='C')
             
-        # Akumulasi Rasio Data
         acc_dt = item['data_accum']
         r_da, g_da, b_da = get_percentage_color(acc_dt)
         pdf.set_fill_color(r_da, g_da, b_da)
@@ -657,7 +723,6 @@ def generate_pdf_bytes(nama_teknisi, label_periode, triwulan_label, tahun, df_ke
         pdf.cell(0, 6, item, ln=1)
         pdf.set_x(10)
 
-    # Sheet references dinamis berdasarkan tahun
     df_log = None
     df_jadwal_sheet = None
     df_ola_sheet = None
