@@ -57,7 +57,7 @@ COLOR_MAP_JADWAL = {
     "G": (248, 196, 113)    # Oranye Muda - Pembuatan Gas
 }
 
-# --- HELPER PEWARNAAN GRADASI GRADIENT (0% - 100%) ---
+# --- HELPER PEWARNAAN KATEGORI OLA SLA ---
 def get_percentage_color(val):
     try:
         if isinstance(val, str):
@@ -65,26 +65,16 @@ def get_percentage_color(val):
         v = float(val)
         if 0 < v <= 1.0:
             v = v * 100.0
-        v = max(0.0, min(100.0, v))
+        v = round(v, 2)
     except (ValueError, TypeError):
         return (255, 255, 255) # Putih untuk data kosong/invalid
 
     if v >= 100.0:
-        return (169, 223, 191) # Hijau Soft
+        return (169, 223, 191)  # Hijau (100%)
     elif v >= 80.0:
-        # Gradasi Kuning -> Hijau
-        ratio = (v - 80.0) / 20.0
-        r = int(249 + (169 - 249) * ratio)
-        g = int(231 + (223 - 231) * ratio)
-        b = int(159 + (191 - 159) * ratio)
-        return (r, g, b)
+        return (249, 231, 159)  # Kuning (80% - 99.9%)
     else:
-        # Gradasi Merah -> Kuning
-        ratio = v / 80.0
-        r = int(241 + (249 - 241) * ratio)
-        g = int(148 + (231 - 148) * ratio)
-        b = int(138 + (159 - 138) * ratio)
-        return (r, g, b)
+        return (241, 148, 138)  # Merah (< 80%)
 
 # --- HELPER DATABASE ---
 def get_db_connection():
@@ -401,16 +391,24 @@ def draw_jadwal_page(pdf, nama_teknisi, nip, bulan_nama, tahun, triwulan_label, 
     pdf.set_font('helvetica', '', 7)
     pdf.cell(w_name, 4, f"NIP. {nip}" if nip else "", align='L')
     
-    # --- RENDER TANGGAL JADWAL DENGAN WARNA KODE ---
-    pdf.set_font('helvetica', 'B', 7)
+    # --- RENDER TANGGAL JADWAL DENGAN MULTI-WARNA BAGI SEL ---
+    pdf.set_font('helvetica', 'B', 6.5)
     for d in range(1, 32):
         x_d = 10 + w_name + (d - 1) * w_day
         val = str(days_dict.get(d, '')).strip().upper()
+        tokens = [t for t in val.split() if t in COLOR_MAP_JADWAL]
         
-        if val in COLOR_MAP_JADWAL:
-            r, g, b = COLOR_MAP_JADWAL[val]
+        if len(tokens) == 1:
+            r, g, b = COLOR_MAP_JADWAL[tokens[0]]
             pdf.set_fill_color(r, g, b)
             pdf.rect(x_d, y_data, w_day, total_row_h, style='DF')
+        elif len(tokens) > 1:
+            sub_w = w_day / len(tokens)
+            for idx, tok in enumerate(tokens):
+                r, g, b = COLOR_MAP_JADWAL[tok]
+                pdf.set_fill_color(r, g, b)
+                pdf.rect(x_d + (idx * sub_w), y_data, sub_w, total_row_h, style='DF')
+            pdf.rect(x_d, y_data, w_day, total_row_h) # Frame luar
         else:
             pdf.rect(x_d, y_data, w_day, total_row_h)
             
@@ -432,7 +430,6 @@ def draw_jadwal_page(pdf, nama_teknisi, nip, bulan_nama, tahun, triwulan_label, 
         ("G", "= Pembuatan Gas")
     ]
     
-    # --- RENDER LEGENDA DENGAN WARNA MAPPING ---
     for kode, ket in legenda:
         pdf.set_x(10)
         curr_y = pdf.get_y()
@@ -530,12 +527,11 @@ def draw_olasla_page(pdf, ola_data, nama_teknisi, nip_teknisi, tahun):
             x_d = 10 + w_left + (d - 1) * w_day
             st_val = str(item['status_days'][d-1] if d-1 < len(item['status_days']) else '').strip().upper()
             
-            # Warna ON/OFF
             if st_val == "ON":
-                pdf.set_fill_color(169, 223, 191) # Hijau Soft
+                pdf.set_fill_color(169, 223, 191) # Hijau
                 pdf.rect(x_d, y_data, w_day, row_h, style='DF')
             elif st_val == "OFF":
-                pdf.set_fill_color(241, 148, 138) # Merah Soft
+                pdf.set_fill_color(241, 148, 138) # Merah
                 pdf.rect(x_d, y_data, w_day, row_h, style='DF')
             else:
                 pdf.rect(x_d, y_data, w_day, row_h)
@@ -543,7 +539,7 @@ def draw_olasla_page(pdf, ola_data, nama_teknisi, nip_teknisi, tahun):
             pdf.set_xy(x_d, y_data + 1)
             pdf.cell(w_day, 4, st_val, align='C')
             
-        # Akumulasi Status dengan Gradasi Warna
+        # Akumulasi Status
         acc_st = item['status_accum']
         r, g, b = get_percentage_color(acc_st)
         pdf.set_fill_color(r, g, b)
@@ -555,7 +551,7 @@ def draw_olasla_page(pdf, ola_data, nama_teknisi, nip_teknisi, tahun):
         
         y_data += row_h
         
-        # --- ROW DATA ---
+        # --- ROW DATA (RASIO TERSEDIA) ---
         pdf.rect(10, y_data, w_no, row_h)
         pdf.rect(10 + w_no, y_data, w_kode, row_h)
         pdf.set_xy(10 + w_no, y_data + 1)
@@ -579,7 +575,7 @@ def draw_olasla_page(pdf, ola_data, nama_teknisi, nip_teknisi, tahun):
             pdf.set_xy(x_d, y_data + 1)
             pdf.cell(w_day, 4, str(dt_str), align='C')
             
-        # Akumulasi Data dengan Gradasi Warna
+        # Akumulasi Rasio Data
         acc_dt = item['data_accum']
         r_da, g_da, b_da = get_percentage_color(acc_dt)
         pdf.set_fill_color(r_da, g_da, b_da)
@@ -675,7 +671,6 @@ def generate_pdf_bytes(nama_teknisi, label_periode, triwulan_label, tahun, df_ke
             df_jadwal_sheet = pd.read_excel(uploaded_excel, sheet_name=f'JADWAL {tahun}', header=None)
         except Exception:
             try:
-                # Fallback search sheet containing JADWAL
                 xl = pd.ExcelFile(uploaded_excel)
                 match = [s for s in xl.sheet_names if 'JADWAL' in s.upper()]
                 if match: df_jadwal_sheet = pd.read_excel(uploaded_excel, sheet_name=match[0], header=None)
@@ -684,7 +679,6 @@ def generate_pdf_bytes(nama_teknisi, label_periode, triwulan_label, tahun, df_ke
             df_ola_sheet = pd.read_excel(uploaded_excel, sheet_name=f'OLA SLA {tahun}', header=None)
         except Exception:
             try:
-                # Fallback search sheet containing OLA
                 xl = pd.ExcelFile(uploaded_excel)
                 match = [s for s in xl.sheet_names if 'OLA' in s.upper()]
                 if match: df_ola_sheet = pd.read_excel(uploaded_excel, sheet_name=match[0], header=None)
@@ -706,7 +700,6 @@ def generate_pdf_bytes(nama_teknisi, label_periode, triwulan_label, tahun, df_ke
             pdf.set_y(15) 
             draw_logbook_page(pdf, f"POS METEOROLOGI TAMBOLAKA - BULAN {bulan_item.upper()}", posmet_data, total_aloptama, is_posmet=True)
 
-    # SIMPAN NIP TEKNISI DINAMIS DARIPADA HARDCODED
     nip_teknisi_dinamis = ""
 
     # --- 3. JADWAL PEMELIHARAAN (TANPA KOP SURAT) ---
@@ -795,7 +788,7 @@ def generate_pdf_bytes(nama_teknisi, label_periode, triwulan_label, tahun, df_ke
                     
                 y_start += row_h
 
-    # --- 5. OLA SLA (TANPA KOP SURAT, MENGGUNAKAN NIP DINAMIS) ---
+    # --- 5. OLA SLA (TANPA KOP SURAT) ---
     if df_ola_sheet is not None:
         for bulan_item in list_bulan_logbook:
             ola_data = parse_olasla(df_ola_sheet, bulan_item)
