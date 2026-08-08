@@ -5,7 +5,7 @@ import io
 import os
 from datetime import datetime
 from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image, KeepTogether
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -94,7 +94,10 @@ def calculate_priority(row):
         score = max(score, 2 + char_code)
     return score
 
-def generate_pdf_bytes_metar_speci(df_clean, logo_path, report_type="METAR"):
+# ==========================================
+# ======= METAR PDF & EXCEL GENERATOR ======
+# ==========================================
+def generate_pdf_bytes_metar(df_clean, logo_path):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=75, topMargin=25, bottomMargin=25)
     story = []
@@ -110,7 +113,7 @@ def generate_pdf_bytes_metar_speci(df_clean, logo_path, report_type="METAR"):
             
         nama_bulan = BULAN_INDO[date.month]
         tanggal_format = f"{date.day:02d} {nama_bulan} {date.year}"
-        judul_rekap = f"REKAP DATA {report_type}: {tanggal_format}".upper()
+        judul_rekap = f"REKAP DATA METAR: {tanggal_format}".upper()
         text_block = [
             Paragraph("<b>BALAI BESAR METEOROLOGI KLIMATOLOGI DAN GEOFISIKA WILAYAH III</b>", header_text_style),
             Paragraph(f"<b>{nama_stasiun}</b>", header_text_style),
@@ -136,7 +139,7 @@ def generate_pdf_bytes_metar_speci(df_clean, logo_path, report_type="METAR"):
         story.append(header_table)
         story.append(Spacer(1, 10))
         
-        headers = [report_type, 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK']
+        headers = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK']
         table_data = [headers]
         
         base_table_style = [
@@ -158,6 +161,97 @@ def generate_pdf_bytes_metar_speci(df_clean, logo_path, report_type="METAR"):
         metar_table = Table(table_data, colWidths=col_widths)
         metar_table.setStyle(TableStyle(base_table_style))
         story.append(metar_table)
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
+# ==========================================
+# ======= SPECI PDF & EXCEL GENERATOR ======
+# ==========================================
+def generate_pdf_bytes_speci(df_clean, logo_path):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=75, topMargin=25, bottomMargin=25)
+    story = []
+    
+    styles = getSampleStyleSheet()
+    header_text_style = ParagraphStyle('HeaderCenterText', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=11, leading=15, alignment=1)
+    sub_header_style = ParagraphStyle('SubHeader', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=10, leading=14, spaceAfter=5, spaceBefore=5)
+    
+    nama_stasiun = df_clean['station_name'].iloc[0].upper() if 'station_name' in df_clean.columns else "STASIUN METEOROLOGI"
+    
+    # Ekstrak tahun dan bulan untuk pengelompokan (Bulanan)
+    df_clean['year'] = df_clean['datetime'].dt.year
+    df_clean['month'] = df_clean['datetime'].dt.month
+    grouped_month = df_clean.groupby(['year', 'month'])
+    
+    for count_month, ((year, month), month_group) in enumerate(grouped_month):
+        if count_month > 0: 
+            story.append(PageBreak()) # Lembar baru HANYA saat ganti bulan
+            
+        nama_bulan = BULAN_INDO[month]
+        judul_rekap = f"REKAP DATA SPECI BULAN: {nama_bulan} {year}".upper()
+        text_block = [
+            Paragraph("<b>BALAI BESAR METEOROLOGI KLIMATOLOGI DAN GEOFISIKA WILAYAH III</b>", header_text_style),
+            Paragraph(f"<b>{nama_stasiun}</b>", header_text_style),
+            Paragraph("<b>JL. ADI SUCIPTO NO. 3</b>", header_text_style),
+            Paragraph(f"<b>{judul_rekap}</b>", header_text_style)
+        ]
+        
+        if logo_path and os.path.exists(logo_path):
+            logo_img = Image(logo_path, width=48, height=48)
+            header_table = Table([[logo_img, text_block, ""]], colWidths=[50, 430, 20])
+            header_table.setStyle(TableStyle([
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'), ('ALIGN', (0,0), (0,0), 'CENTER'), ('ALIGN', (1,0), (1,0), 'CENTER'),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 6), ('TOPPADDING', (0,0), (-1,-1), 0), ('LINEBELOW', (0,0), (-1,-1), 1.5, colors.black),
+                ('LEFTPADDING', (1,0), (1,0), 0), ('RIGHTPADDING', (1,0), (1,0), 0)
+            ]))
+        else:
+            header_table = Table([[text_block]], colWidths=[500])
+            header_table.setStyle(TableStyle([
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'), ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 6), ('LINEBELOW', (0,0), (-1,-1), 1.5, colors.black),
+            ]))
+            
+        story.append(header_table)
+        story.append(Spacer(1, 10))
+        
+        # Di dalam bulan yang sama, kelompokkan per tanggal
+        grouped_date = month_group.groupby('date_group')
+        
+        for date, date_group in grouped_date:
+            tanggal_format = f"{date.day:02d} {nama_bulan} {year}"
+            
+            # Agar Sub Header dan Tabel tidak terpisah beda halaman, kita bungkus dalam KeepTogether
+            group_story = []
+            group_story.append(Paragraph(f"<b>Tanggal: {tanggal_format}</b>", sub_header_style))
+            
+            headers = ['SPECI', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK']
+            table_data = [headers]
+            
+            base_table_style = [
+                ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey), ('ALIGN', (0, 0), (-1, -1), 'CENTER'), ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.black), ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5), ('TOPPADDING', (0, 0), (-1, -1), 2.5),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'), ('FONTSIZE', (0, 0), (-1, 0), 8), ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'), ('FONTSIZE', (0, 1), (-1, -1), 8),
+            ]
+            
+            for idx, row in date_group.iterrows():
+                current_row_idx = len(table_data)
+                if row['VIS'] == 'CAVOK':
+                    row_data = [str(row['TYPE']), str(row['LOC']), str(row['TIME']), str(row['WIND']), 'CAVOK', '', '', str(row['T/DP']), str(row['QNH']), str(row['RMK'])]
+                    base_table_style.append(('SPAN', (4, current_row_idx), (6, current_row_idx)))
+                else:
+                    row_data = [str(row['TYPE']), str(row['LOC']), str(row['TIME']), str(row['WIND']), str(row['VIS']), str(row['WX']), str(row['CLOUD']), str(row['T/DP']), str(row['QNH']), str(row['RMK'])]
+                table_data.append(row_data)
+                
+            col_widths = [40, 35, 50, 65, 35, 35, 90, 40, 45, 55] 
+            speci_table = Table(table_data, colWidths=col_widths)
+            speci_table.setStyle(TableStyle(base_table_style))
+            
+            group_story.append(speci_table)
+            group_story.append(Spacer(1, 15)) # Jarak antar tabel tanggal
+            
+            story.append(KeepTogether(group_story))
 
     doc.build(story)
     buffer.seek(0)
@@ -390,7 +484,6 @@ if menu == "METAR Converter":
                         df_clean['raw_timestamp'] = df_clean['raw_timestamp'].str.replace(" +0000 UTC", "", regex=False)
                         df_clean['datetime'] = pd.to_datetime(df_clean['raw_timestamp'])
                         
-                        # METAR difilter khusus jam genap (:00)
                         df_clean = df_clean[df_clean['datetime'].dt.minute == 0]
                         df_clean['priority_score'] = df_clean.apply(calculate_priority, axis=1)
                         df_clean = df_clean.sort_values(by=['datetime', 'priority_score', 'msg_id'])
@@ -404,7 +497,7 @@ if menu == "METAR Converter":
                         else:
                             st.success(f"Berhasil memproses data METAR!")
                             
-                            pdf_data = generate_pdf_bytes_metar_speci(df_clean, LOGO_FILE, report_type="METAR")
+                            pdf_data = generate_pdf_bytes_metar(df_clean, LOGO_FILE)
                             excel_data = generate_excel_bytes_metar_speci(df_clean, report_type="METAR")
                             
                             first_date = df_clean['date_group'].iloc[0]
@@ -459,7 +552,6 @@ elif menu == "SPECI Converter":
                         df_clean['raw_timestamp'] = df_clean['raw_timestamp'].str.replace(" +0000 UTC", "", regex=False)
                         df_clean['datetime'] = pd.to_datetime(df_clean['raw_timestamp'])
                         
-                        # SPECI TIDAK difilter berdasarkan menit :00
                         df_clean['priority_score'] = df_clean.apply(calculate_priority, axis=1)
                         df_clean = df_clean.sort_values(by=['datetime', 'priority_score', 'msg_id'])
                         df_clean = df_clean.drop_duplicates(subset=['datetime'], keep='last')
@@ -469,11 +561,13 @@ elif menu == "SPECI Converter":
                         
                         st.success(f"Berhasil memproses {len(df_clean)} data SPECI!")
                         
-                        pdf_data = generate_pdf_bytes_metar_speci(df_clean, LOGO_FILE, report_type="SPECI")
+                        # MENGGUNAKAN GENERATOR PDF KHUSUS SPECI (BULANAN)
+                        pdf_data = generate_pdf_bytes_speci(df_clean, LOGO_FILE)
                         excel_data = generate_excel_bytes_metar_speci(df_clean, report_type="SPECI")
                         
-                        first_date = df_clean['date_group'].iloc[0]
-                        nama_file_base = f"REKAP_SPECI_{first_date.day:02d}_{BULAN_INDO[first_date.month]}_{first_date.year}"
+                        # NAMA FILE MENYESUAIKAN BULAN
+                        first_date = df_clean['datetime'].iloc[0]
+                        nama_file_base = f"REKAP_SPECI_BULAN_{BULAN_INDO[first_date.month]}_{first_date.year}"
                         
                         st.write("---")
                         st.subheader("Unduh Laporan SPECI")
