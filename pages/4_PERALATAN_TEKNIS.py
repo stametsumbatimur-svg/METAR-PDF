@@ -67,6 +67,23 @@ COLOR_MAP_JADWAL = {
     "G": (248, 196, 113)    # Oranye Muda
 }
 
+# --- HELPER KOMPRESI FOTO ---
+def save_uploaded_photo(uploaded_file, output_path, max_size=(800, 800), quality=85):
+    """Mengompresi dan menyimpan foto menjadi JPEG agar hemat penyimpanan & PDF tidak berat."""
+    try:
+        with Image.open(uploaded_file) as img:
+            # Konversi ke RGB jika format gambar memiliki transparansi (RGBA/PNG)
+            if img.mode in ("RGBA", "P"):
+                img = img.convert("RGB")
+            # Resize dengan mempertahankan rasio (thumbnail)
+            img.thumbnail(max_size, Image.Resampling.LANCZOS)
+            # Simpan dengan optimasi ukuran
+            img.save(output_path, "JPEG", optimize=True, quality=quality)
+    except Exception as e:
+        # Fallback standar jika proses pengolahan gambar gagal
+        with open(output_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+
 # --- HELPER PEWARNAAN KATEGORI OLA SLA ---
 def get_percentage_color(val):
     try:
@@ -803,12 +820,11 @@ def generate_pdf_bytes(nama_teknisi, label_periode, triwulan_label, tahun, df_ke
             pdf.set_y(15)
             draw_jadwal_page(pdf, name_res, nip_res, bulan_item, tahun, triwulan_label, days_dict)
 
-    # --- 4. LAMPIRAN DOKUMENTASI FOTO (TERURUT DINAMIS BERDASARKAN TANGGAL) ---
+    # --- 4. LAMPIRAN DOKUMENTASI FOTO ---
     for bulan_item in list_bulan_logbook:
         b_code = MONTH_MAP[bulan_item]
         df_kegiatan_bulan = df_kegiatan[df_kegiatan['tanggal'].astype(str).str.slice(5, 7) == b_code] if not df_kegiatan.empty else pd.DataFrame()
         
-        # Pastikan data diurutkan secara rinci berdasarkan tanggal ASC
         if not df_kegiatan_bulan.empty:
             df_kegiatan_bulan = df_kegiatan_bulan.sort_values(by=['tanggal', 'id'], ascending=[True, True])
 
@@ -966,10 +982,11 @@ with tab1:
                 if fotos:
                     for idx, foto in enumerate(fotos):
                         timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                        fname = f"{timestamp_str}_{idx}_{foto.name}"
+                        fname = f"{timestamp_str}_{idx}.jpg" # Standarisasi ektensi file
                         file_path = os.path.join(UPLOAD_DIR, fname)
-                        with open(file_path, "wb") as f:
-                            f.write(foto.getbuffer())
+                        
+                        # Terapkan kompresi sebelum disimpan
+                        save_uploaded_photo(foto, file_path)
                         saved_paths.append(file_path)
                     
                 foto_db_val = json.dumps(saved_paths) if saved_paths else ""
@@ -981,12 +998,11 @@ with tab1:
                         (tanggal.strftime("%Y-%m-%d"), nama, kegiatan_str, foto_db_val)
                     )
                     conn.commit()
-                st.success(f"Data kegiatan berhasil disimpan! ({len(saved_paths)} foto tersimpan)")
+                st.success(f"Data kegiatan berhasil disimpan! ({len(saved_paths)} foto tersimpan & dikompresi)")
 
 with tab2:
     st.subheader("Arsip & Pengelolaan Data Kegiatan Teknisi")
     
-    # PERBAIKAN FITUR 2: QUERY SELALU DIURUTKAN SECARA OTOMATIS BERDASARKAN TANGGAL ASC
     with get_db_connection() as conn:
         df_db = pd.read_sql("SELECT * FROM e_kinerja ORDER BY tanggal ASC, id ASC", conn)
         
@@ -995,7 +1011,6 @@ with tab2:
         st.caption("ℹ️ *Data di atas telah diurutkan secara otomatis berdasarkan kronologi tanggal.*")
         st.markdown("---")
         
-        # PERBAIKAN FITUR 1: FITUR EDIT DAN HAPUS DATA
         col_act1, col_act2 = st.columns(2)
         
         # --- SUB-AKSI 1: EDIT DATA ---
@@ -1043,7 +1058,6 @@ with tab2:
                             kegiatan_edit_str = ", ".join(edit_kegiatan)
                             
                             if opsi_foto == "Ganti/Tambah Foto Baru" and new_edit_fotos:
-                                # Hapus berkas lama
                                 for p in exist_photos:
                                     if os.path.exists(p):
                                         try: os.remove(p)
@@ -1052,10 +1066,11 @@ with tab2:
                                 saved_edit_paths = []
                                 for idx, foto in enumerate(new_edit_fotos):
                                     timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                                    fname = f"EDIT_{timestamp_str}_{idx}_{foto.name}"
+                                    fname = f"EDIT_{timestamp_str}_{idx}.jpg"
                                     file_path = os.path.join(UPLOAD_DIR, fname)
-                                    with open(file_path, "wb") as f:
-                                        f.write(foto.getbuffer())
+                                    
+                                    # Terapkan kompresi pada foto pengganti
+                                    save_uploaded_photo(foto, file_path)
                                     saved_edit_paths.append(file_path)
                                 final_foto_path = json.dumps(saved_edit_paths)
                             else:
@@ -1080,7 +1095,6 @@ with tab2:
                 st.warning(f"Apakah Anda yakin ingin menghapus data ID **{id_del_selected}** ({row_del['tanggal']} - {row_del['nama_teknisi']})?")
                 
                 if st.button("Hapus Permanen Data Selected", type="primary"):
-                    # Hapus file foto terkait dari server
                     del_photos = parse_foto_paths(row_del['foto_path'])
                     for p in del_photos:
                         if os.path.exists(p):
@@ -1138,7 +1152,6 @@ with tab3:
                 triwulan_label = ""
                 list_bulan_logbook = [filter_bulan]
                 bulan_code = MONTH_MAP[filter_bulan]
-                # Query Otomatis Diurutkan berdasarkan Tanggal (ASC)
                 query = "SELECT * FROM e_kinerja WHERE nama_teknisi = ? AND strftime('%m', tanggal) = ? AND strftime('%Y', tanggal) = ? ORDER BY tanggal ASC, id ASC"
                 params = [filter_nama, bulan_code, filter_tahun]
             else:
@@ -1147,7 +1160,6 @@ with tab3:
                 triwulan_label = q_info['label']
                 list_bulan_logbook = q_info["month_names"]
                 months_code = q_info["months"]
-                # Query Otomatis Diurutkan berdasarkan Tanggal (ASC)
                 query = f"SELECT * FROM e_kinerja WHERE nama_teknisi = ? AND strftime('%m', tanggal) IN ({','.join(['?']*len(months_code))}) AND strftime('%Y', tanggal) = ? ORDER BY tanggal ASC, id ASC"
                 params = [filter_nama] + months_code + [filter_tahun]
             
