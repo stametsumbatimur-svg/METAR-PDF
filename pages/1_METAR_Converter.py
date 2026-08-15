@@ -1028,7 +1028,7 @@ menu = st.sidebar.radio(
         "WXREV Converter", 
         "Thunderstorm Exporter", 
         "Form Perawanan Exporter",
-        "Form A/B"
+        "Form Komponen Angin, UWI, dan UWII"
     ]
 )
 st.sidebar.markdown("---")
@@ -1270,7 +1270,7 @@ elif menu == "Form Perawanan Exporter":
                 with col_xlsx: st.download_button(label="📊 Download Excel Perawanan", data=excel_data, file_name=f"PERAWANAN_{dt_min.strftime('%Y%m')}_{dt_max.strftime('%Y%m')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # --- HALAMAN PIBAL / RADIOSONDE ---
-elif menu == "Form A/B":
+elif menu == "Form Komponen Angin, UWI, dan UWII":
     st.title("🎈 Otomatisasi Rekap Udara Atas (Pibal / Radiosonde)")
     st.subheader("Stasiun Meteorologi BMKG")
     st.markdown("---")
