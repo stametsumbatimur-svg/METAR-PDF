@@ -27,6 +27,11 @@ BULAN_INDO = {
     9: "SEPTEMBER", 10: "OKTOBER", 11: "NOVEMBER", 12: "DESEMBER"
 }
 
+def safe_set_cell(ws, row, col, value):
+    cell = ws.cell(row=row, column=col)
+    if not isinstance(cell, MergedCell): 
+        cell.value = value
+
 # ==========================================
 # ===== METAR & SPECI PARSER FUNCTIONS =====
 # ==========================================
@@ -884,10 +889,6 @@ def get_max_height_from_parsed(parsed_data):
             except ValueError: pass
     return max_feet if max_feet > 0 else 0
 
-def safe_set_cell(ws, row, col, value):
-    cell = ws.cell(row=row, column=col)
-    if not isinstance(cell, MergedCell): cell.value = value  
-
 def process_template_uw1(wb, df_records, nama_bulan, sample_year, sample_month_num):
     ws_uw1 = wb['UW I'] if 'UW I' in wb.sheetnames else None
     ws_uw2 = wb['UW II'] if 'UW II' in wb.sheetnames else None
@@ -1036,12 +1037,9 @@ def process_form_ab(wb, df_hellman, df_penguapan, nama_bulan, sample_year, num_d
     ws_b1 = wb['B 1'] if 'B 1' in wb.sheetnames else None
     ws_b2 = wb['B 2'] if 'B 2' in wb.sheetnames else None
 
-    # ==========================
-    # 1. Mengisi Sheet A
-    # ==========================
     if ws_a:
-        safe_set_cell(ws_a, 5, 19, nama_bulan) # S5 (Bulan)
-        safe_set_cell(ws_a, 6, 19, sample_year) # S6 (Tahun)
+        safe_set_cell(ws_a, 5, 19, nama_bulan) # S5
+        safe_set_cell(ws_a, 6, 19, sample_year) # S6
         
         col_map_a_intensitas = {
             'hellman_5mnt': 1, 'hellman_10mnt': 2, 'hellman_15mnt': 3,
@@ -1059,9 +1057,8 @@ def process_form_ab(wb, df_hellman, df_penguapan, nama_bulan, sample_year, num_d
             'hellman_03_04': 32, 'hellman_04_05': 33, 'hellman_05_06': 34, 'hellman_06_07': 35
         }
 
-        # Clear isi sebelumnya dan Tulis Tanggal di Kolom K (Kolom 11)
         for d in range(1, 32):
-            r = 11 + d # Baris 12 s.d 42
+            r = 11 + d
             if d <= num_days:
                 safe_set_cell(ws_a, r, 11, d)
                 for c in range(1, 36):
@@ -1097,9 +1094,6 @@ def process_form_ab(wb, df_hellman, df_penguapan, nama_bulan, sample_year, num_d
             date_val = max_values_a[col_name]['date']
             safe_set_cell(ws_a, 44, col_idx, date_val if date_val != "-" else "")
 
-    # ==========================
-    # 2. Mengisi Sheet B 1
-    # ==========================
     if ws_b1:
         safe_set_cell(ws_b1, 5, 17, nama_bulan) # Q5
         safe_set_cell(ws_b1, 6, 17, sample_year) # Q6
@@ -1130,9 +1124,6 @@ def process_form_ab(wb, df_hellman, df_penguapan, nama_bulan, sample_year, num_d
                     val = get_val_special(row.get(col_name, 0))
                     safe_set_cell(ws_b1, target_row, col_idx, val if val != 0 else 0)
 
-    # ==========================
-    # 3. Mengisi Sheet B 2
-    # ==========================
     if ws_b2:
         col_map_b2_intensitas = {
             'hellman_5mnt': 5, 'hellman_10mnt': 6, 'hellman_15mnt': 7,
@@ -1143,7 +1134,7 @@ def process_form_ab(wb, df_hellman, df_penguapan, nama_bulan, sample_year, num_d
         for r in range(5, 36):
             d = r - 4
             if d <= num_days:
-                safe_set_cell(ws_b2, r, 2, None) # Clear Kolom B (Pengukuran OBS)
+                safe_set_cell(ws_b2, r, 2, None)
             else:
                 safe_set_cell(ws_b2, r, 2, "-")
                 
@@ -1153,15 +1144,11 @@ def process_form_ab(wb, df_hellman, df_penguapan, nama_bulan, sample_year, num_d
                 else:
                     safe_set_cell(ws_b2, r, c, "-")
 
-        # Masukkan Nilai Pengukuran OBS (rr_0700) dari CSV Penguapan ke Sheet B2 Kolom B
-        # PERBAIKAN OPERASIONAL: Lintas Bulan (Tanggal N-1)
         if df_penguapan is not None and not df_penguapan.empty:
             for _, row in df_penguapan.iterrows():
                 dt = row['datetime']
-                # Menggeser tanggal -1 hari
                 target_dt = dt - pd.Timedelta(days=1)
                 
-                # Cek jika tanggal target jatuh pada bulan dan tahun yang sedang diproses
                 if target_dt.month == df_penguapan['target_month'].iloc[0] and target_dt.year == df_penguapan['target_year'].iloc[0]:
                     target_day = target_dt.day
                     val = get_val_special(row.get('rr_0700', 0))
@@ -1196,7 +1183,6 @@ def process_template_penguapan(wb, df_penguapan_full, target_year, target_month,
     safe_set_cell(ws, 2, 7, f":  {target_year}")
     safe_set_cell(ws, 3, 7, f":  {nama_bulan}")
     
-    # Area Cleaning Tanggal 16-31
     for d in range(16, 32):
         if d > num_days:
             r = d - 5 
@@ -1207,10 +1193,8 @@ def process_template_penguapan(wb, df_penguapan_full, target_year, target_month,
             
     for _, row in df_penguapan_full.iterrows():
         dt = row['datetime']
-        # LOGIKA PERBAIKAN: Pembacaan 07.00 WS tanggal N dimasukkan ke Laporan Tanggal N - 1 Hari
         target_dt = dt - pd.Timedelta(days=1)
         
-        # Pastikan data yang dimasukkan adalah yang berada pada bulan dan tahun laporan berjalan
         if target_dt.month == target_month and target_dt.year == target_year:
             target_day = target_dt.day
             
@@ -1221,23 +1205,95 @@ def process_template_penguapan(wb, df_penguapan_full, target_year, target_month,
             
             if target_day <= 15:
                 r = 10 + target_day
-                safe_set_cell(ws, r, 2, diff)    # Beda Tinggi H (Kolom B)
-                safe_set_cell(ws, r, 3, rr)      # Hujan P (Kolom C)
-                safe_set_cell(ws, r, 12, ws_avg) # Kecepatan Angin (Kolom L)
-                safe_set_cell(ws, r, 13, t_air)  # Suhu Air (Kolom M)
+                safe_set_cell(ws, r, 2, diff)
+                safe_set_cell(ws, r, 3, rr)
+                safe_set_cell(ws, r, 12, ws_avg)
+                safe_set_cell(ws, r, 13, t_air)
             else:
-                r = target_day - 5 # Tgl 16 -> Baris 11
-                safe_set_cell(ws, r, 7, diff)    # Beda Tinggi H (Kolom G)
-                safe_set_cell(ws, r, 8, rr)      # Hujan P (Kolom H)
-                safe_set_cell(ws, r, 15, ws_avg) # Kecepatan Angin (Kolom O)
-                safe_set_cell(ws, r, 16, t_air)  # Suhu Air (Kolom P)
+                r = target_day - 5
+                safe_set_cell(ws, r, 7, diff)
+                safe_set_cell(ws, r, 8, rr)
+                safe_set_cell(ws, r, 15, ws_avg)
+                safe_set_cell(ws, r, 16, t_air)
             
+    return wb
+
+# =========================================================
+# ===== LAMA PENYINARAN MATAHARI (LPM) FUNCTIONS ==========
+# =========================================================
+
+def process_template_lpm(wb, df_lpm_month, year, month, num_days, nama_bulan, kepala_nama, kepala_nip):
+    ws = wb['LPM'] if 'LPM' in wb.sheetnames else wb.active
+    
+    # 1. Update Metadata (Bulan & Tahun ke D5 & D6)
+    safe_set_cell(ws, 5, 4, f": {nama_bulan}") # Cell D5
+    safe_set_cell(ws, 6, 4, f": {year}")       # Cell D6
+    
+    col_mapping = {
+        'ss_6_7': 3,   'ss_7_8': 4,   'ss_8_9': 5,   'ss_9_10': 6,
+        'ss_10_11': 7, 'ss_11_12': 8, 'ss_12_13': 9, 'ss_13_14': 10,
+        'ss_14-15': 11,'ss_15_16': 12,'ss_16_17': 13,'ss_17_18': 14
+    }
+    
+    # Pre-populate 1 s.d. 31 dengan "-"
+    month_data = {}
+    if df_lpm_month is not None and not df_lpm_month.empty:
+        for _, r in df_lpm_month.iterrows():
+            month_data[r['day']] = r
+            
+    last_observer = ""
+
+    # Loop Baris 14 s.d 44 (Tanggal 1 s.d 31)
+    for d in range(1, 32):
+        r = 13 + d # Baris 14 untuk d=1
+        
+        # Jika tanggal melebihi jumlah hari dalam bulan berjalan
+        if d > num_days:
+            for col_idx in range(3, 19): # Kolom C s.d R
+                safe_set_cell(ws, r, col_idx, "-")
+        else:
+            if d in month_data:
+                row_data = month_data[d]
+                
+                # Isi Jam 6-7 s.d 17-18 (Kolom C s.d N)
+                for col_name, col_idx in col_mapping.items():
+                    val = row_data.get(col_name)
+                    if pd.notna(val):
+                        try:
+                            safe_set_cell(ws, r, col_idx, float(val))
+                        except:
+                            safe_set_cell(ws, r, col_idx, str(val))
+                    else:
+                        safe_set_cell(ws, r, col_idx, "-")
+                
+                # Isi ss_total_8 (Kolom O) & ss_total_12 (Kolom Q)
+                tot8 = row_data.get('ss_total_8')
+                tot12 = row_data.get('ss_total_12')
+                safe_set_cell(ws, r, 15, float(tot8) if pd.notna(tot8) else "-")
+                safe_set_cell(ws, r, 17, float(tot12) if pd.notna(tot12) else "-")
+                
+                if pd.notna(row_data.get('observer_name')):
+                    last_observer = str(row_data['observer_name'])
+            else:
+                # Tanggal valid tapi tidak ada di CSV
+                for col_idx in range(3, 19):
+                    safe_set_cell(ws, r, col_idx, "-")
+                    
+    # Update Blok Pengesahan / Tanda Tangan
+    tgl_ttd = f"WAINGAPU, {num_days} {nama_bulan} {year}"
+    safe_set_cell(ws, 48, 13, tgl_ttd) # Cell M48
+    safe_set_cell(ws, 55, 2, kepala_nama) # Cell B55
+    if kepala_nip:
+        safe_set_cell(ws, 56, 2, f"NIP. {kepala_nip}") # Cell B56
+        
+    if last_observer:
+        safe_set_cell(ws, 55, 13, last_observer.upper()) # Cell M55
+        
     return wb
 
 # ==========================================
 # ======== ANTARMUKA WEB STREAMLIT =========
 # ==========================================
-# --- SIDEBAR MENU ---
 st.sidebar.title("🎛️ Navigasi Menu")
 menu = st.sidebar.radio(
     "Pilih Converter", 
@@ -1248,11 +1304,12 @@ menu = st.sidebar.radio(
         "Thunderstorm Exporter", 
         "Form Perawanan Exporter",
         "Form Komponen Angin, UWI, dan UWII",
-        "Form A/B Penakar Hujan dan Penguapan"
+        "Form A/B Penakar Hujan dan Penguapan",
+        "Form Lama Penyinaran Matahari (LPM)"
     ]
 )
 st.sidebar.markdown("---")
-st.sidebar.info("Aplikasi ekstraksi data Sandi Cuaca (METAR, SPECI, WXREV, Thunderstorm, Perawanan, Pibal, & Hujan/Penguapan) menjadi Laporan PDF & Excel otomatis.")
+st.sidebar.info("Aplikasi ekstraksi data Sandi Cuaca (METAR, SPECI, WXREV, Thunderstorm, Perawanan, Pibal, Hujan/Penguapan, & LPM) menjadi Laporan PDF & Excel otomatis.")
 
 LOGO_FILE = "logo_bmkg.png"
 
@@ -1657,7 +1714,6 @@ elif menu == "Form A/B Penakar Hujan dan Penguapan":
                             df_penguapan['month'] = df_penguapan['datetime'].dt.month
                             df_penguapan['year'] = df_penguapan['datetime'].dt.year
                             
-                            # Tentukan target laporan bulan dari tanggal pengamatan - 1 hari
                             df_penguapan['target_date'] = df_penguapan['datetime'] - pd.Timedelta(days=1)
                             df_penguapan['target_month'] = df_penguapan['target_date'].dt.month
                             df_penguapan['target_year'] = df_penguapan['target_date'].dt.year
@@ -1678,12 +1734,10 @@ elif menu == "Form A/B Penakar Hujan dan Penguapan":
                                 
                                 df_p_month = pd.DataFrame()
                                 if not df_penguapan.empty:
-                                    # Ambil rentang data penguapan yang relevan untuk bulan target (termasuk tgl 1 bulan berikutnya)
                                     df_p_month = df_penguapan[
                                         (df_penguapan['target_year'] == year) & (df_penguapan['target_month'] == month)
                                     ].sort_values('datetime').reset_index(drop=True)
                                 
-                                # Proses Form A/B
                                 if not df_h_month.empty or not df_p_month.empty:
                                     wb_ab = openpyxl.load_workbook(DEFAULT_TEMPLATE_AB)
                                     wb_ab = process_form_ab(wb_ab, df_h_month, df_p_month, nama_bulan, year, num_days)
@@ -1692,7 +1746,6 @@ elif menu == "Form A/B Penakar Hujan dan Penguapan":
                                     excel_buffer_ab.seek(0)
                                     zip_file.writestr(f"Form_AB_{nama_bulan}_{year}.xlsx", excel_buffer_ab.getvalue())
                                 
-                                # Proses Template Penguapan
                                 if not df_p_month.empty:
                                     wb_peng = openpyxl.load_workbook(DEFAULT_TEMPLATE_PENGUAPAN)
                                     wb_peng = process_template_penguapan(wb_peng, df_p_month, year, month, num_days, nama_bulan)
@@ -1715,3 +1768,80 @@ elif menu == "Form A/B Penakar Hujan dan Penguapan":
                         )
             except Exception as e:
                 st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
+
+# --- HALAMAN FORM LAMA PENYINARAN MATAHARI (LPM) ---
+elif menu == "Form Lama Penyinaran Matahari (LPM)":
+    st.title("☀️ Form Lama Penyinaran Matahari (LPM)")
+    st.write("Ekstraksi data CSV Penyinaran Matahari ke Template Excel (TEMPLATE LPM.xlsx) secara otomatis.")
+    
+    DEFAULT_TEMPLATE_LPM = "TEMPLATE LPM.xlsx"
+    
+    with st.expander("⚙️ Pengaturan Header & Tanda Tangan"):
+        kp_nama = st.text_input("Nama Kepala Stasiun", "Carles Alexander Tari, S.TP", key="lpm_kp")
+        kp_nip = st.text_input("NIP Kepala Stasiun", "197712082001121001", key="lpm_nip")
+        
+    uploaded_lpm_file = st.file_uploader("Upload File CSV Lama Penyinaran Matahari", type=["csv"], key="lpm_uploader")
+    
+    if uploaded_lpm_file:
+        if not os.path.exists(DEFAULT_TEMPLATE_LPM):
+            st.error(f"❌ File '{DEFAULT_TEMPLATE_LPM}' tidak ditemukan di direktori aplikasi!")
+        else:
+            try:
+                # Membaca file CSV
+                df_lpm = pd.read_csv(uploaded_lpm_file)
+                if df_lpm.shape[1] == 1:
+                    uploaded_lpm_file.seek(0)
+                    df_lpm = pd.read_csv(uploaded_lpm_file, skiprows=1)
+                    
+                if 'data_timestamp' not in df_lpm.columns or 'ss_6_7' not in df_lpm.columns:
+                    st.error("Kolom data yang diperlukan ('data_timestamp', 'ss_6_7', dll.) tidak ditemukan pada file CSV yang diunggah.")
+                else:
+                    with st.spinner("Memproses data Penyinaran Matahari..."):
+                        df_lpm['datetime'] = pd.to_datetime(df_lpm['data_timestamp'])
+                        df_lpm['day'] = df_lpm['datetime'].dt.day
+                        df_lpm['month'] = df_lpm['datetime'].dt.month
+                        df_lpm['year'] = df_lpm['datetime'].dt.year
+                        
+                        grouped_months = df_lpm.groupby(['year', 'month'])
+                        
+                        processed_files = []
+                        
+                        for (year, month), month_group in grouped_months:
+                            nama_bulan = BULAN_INDO[month]
+                            num_days = calendar.monthrange(year, month)[1]
+                            
+                            wb_lpm = openpyxl.load_workbook(DEFAULT_TEMPLATE_LPM)
+                            wb_lpm = process_template_lpm(wb_lpm, month_group, year, month, num_days, nama_bulan, kp_nama, kp_nip)
+                            
+                            excel_buffer = io.BytesIO()
+                            wb_lpm.save(excel_buffer)
+                            excel_buffer.seek(0)
+                            
+                            file_name = f"LPM_{nama_bulan}_{year}.xlsx"
+                            processed_files.append((file_name, excel_buffer.getvalue()))
+                            
+                        st.success(f"✅ Berhasil memproses data untuk {len(processed_files)} bulan.")
+                        
+                        if len(processed_files) == 1:
+                            file_name, file_bytes = processed_files[0]
+                            st.download_button(
+                                label="📊 Download File Excel LPM",
+                                data=file_bytes,
+                                file_name=file_name,
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            )
+                        else:
+                            zip_buffer = io.BytesIO()
+                            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                                for file_name, file_bytes in processed_files:
+                                    zip_file.writestr(file_name, file_bytes)
+                                    
+                            zip_buffer.seek(0)
+                            st.download_button(
+                                label="⬇️ Download Semua File LPM (Bentuk ZIP)",
+                                data=zip_buffer,
+                                file_name="Rekap_LPM_Otomatis.zip",
+                                mime="application/zip"
+                            )
+            except Exception as e:
+                st.error(f"❌ Terjadi kesalahan saat memproses data LPM: {e}")
