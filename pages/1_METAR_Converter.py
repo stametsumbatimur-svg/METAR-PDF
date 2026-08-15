@@ -1156,13 +1156,15 @@ def process_form_ab(wb, df_hellman, df_penguapan, nama_bulan, sample_year, num_d
                 else:
                     safe_set_cell(ws_b2, r, c, "-")
 
-        # Masukkan Nilai Pengukuran OBS (rr_0700) dari CSV Penguapan ke Kolom B
+        # Masukkan Nilai Pengukuran OBS (rr_0700) dari CSV Penguapan ke Sheet B2 Kolom B
         if df_penguapan is not None and not df_penguapan.empty:
             for _, row in df_penguapan.iterrows():
-                day = row['day'] + 1
-                if day > num_days: continue
+                # PERBAIKAN: CSV Tanggal N dimasukkan ke Laporan Tanggal (N - 1)
+                target_day = row['day'] - 1
+                if target_day < 1 or target_day > num_days: 
+                    continue
                 val = get_val_special(row.get('rr_0700', 0))
-                safe_set_cell(ws_b2, 4 + day, 2, val if val != 0 else 0)
+                safe_set_cell(ws_b2, 4 + target_day, 2, val if val != 0 else 0)
 
         max_values_b2 = {k: {'val': -0.0001, 'date': "-"} for k in col_map_b2_intensitas.keys()}
                 
@@ -1193,7 +1195,7 @@ def process_template_penguapan(wb, df_records, nama_bulan, sample_year, num_days
     safe_set_cell(ws, 2, 7, f":  {sample_year}")
     safe_set_cell(ws, 3, 7, f":  {nama_bulan}")
     
-    # Cleaning
+    # Area Cleaning Tanggal 16-31
     for d in range(16, 32):
         if d > num_days:
             r = d - 5 
@@ -1203,27 +1205,30 @@ def process_template_penguapan(wb, df_records, nama_bulan, sample_year, num_days
             safe_set_cell(ws, r, 16, "-") 
             
     for _, row in df_records.iterrows():
-        # PERBAIKAN: Geser tanggal pengamatan +1 hari sesuai standar laporan operasional
-        day = row['day'] + 1 
-        if day > num_days: continue
+        # PERBAIKAN: CSV Tanggal N dimasukkan ke Laporan Tanggal (N - 1)
+        target_day = row['day'] - 1 
+        
+        # Abaikan data CSV tanggal 1 bulan berjalan (karena dimasukkan ke tanggal 30/31 bulan sebelumnya)
+        if target_day < 1 or target_day > num_days: 
+            continue
         
         diff = get_val_special(row.get('op_diff_baca_0700', 0))
         rr = get_val_special(row.get('rr_0700', 0))
         ws_avg = get_val_special(row.get('ws_avg_50cm_0700', 0))
         t_air = get_val_special(row.get('t_air_avg_0700', 0))
         
-        if day <= 15:
-            r = 10 + day
-            safe_set_cell(ws, r, 2, diff)   # Kolom B
-            safe_set_cell(ws, r, 3, rr)     # Kolom C
-            safe_set_cell(ws, r, 12, ws_avg)# Kolom L
-            safe_set_cell(ws, r, 13, t_air) # Kolom M
+        if target_day <= 15:
+            r = 10 + target_day
+            safe_set_cell(ws, r, 2, diff)    # Beda Tinggi H (Kolom B)
+            safe_set_cell(ws, r, 3, rr)      # Hujan P (Kolom C)
+            safe_set_cell(ws, r, 12, ws_avg) # Kecepatan Angin (Kolom L)
+            safe_set_cell(ws, r, 13, t_air)  # Suhu Air (Kolom M)
         else:
-            r = day - 5 # Tgl 16 -> Baris 11
-            safe_set_cell(ws, r, 7, diff)   # Kolom G
-            safe_set_cell(ws, r, 8, rr)     # Kolom H
-            safe_set_cell(ws, r, 15, ws_avg)# Kolom O
-            safe_set_cell(ws, r, 16, t_air) # Kolom P
+            r = target_day - 5 # Tgl 16 -> Baris 11
+            safe_set_cell(ws, r, 7, diff)    # Beda Tinggi H (Kolom G)
+            safe_set_cell(ws, r, 8, rr)      # Hujan P (Kolom H)
+            safe_set_cell(ws, r, 15, ws_avg) # Kecepatan Angin (Kolom O)
+            safe_set_cell(ws, r, 16, t_air)  # Suhu Air (Kolom P)
             
     return wb
 
