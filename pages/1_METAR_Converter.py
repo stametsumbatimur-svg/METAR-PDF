@@ -1016,6 +1016,139 @@ def process_template_komponen(wb, df_records, nama_bulan, sample_year):
     return wb
 
 # ==========================================
+# ===== FORM A/B HUJAN HELLMAN FUNCTIONS ===
+# ==========================================
+def process_form_ab(wb, df_records, nama_bulan, sample_year):
+    """
+    Memproses data curah hujan ke dalam Template Form A, B1, dan B2
+    wb: Objek Workbook openpyxl (TEMPLATE FORM A B.xlsx)
+    df_records: DataFrame pandas yang sudah difilter per bulan
+    """
+    ws_a = wb['A'] if 'A' in wb.sheetnames else None
+    ws_b1 = wb['B 1'] if 'B 1' in wb.sheetnames else None
+    ws_b2 = wb['B 2'] if 'B 2' in wb.sheetnames else None
+
+    # Helper function untuk memastikan format angka
+    def to_num(val):
+        try:
+            return float(val) if pd.notna(val) else 0.0
+        except:
+            return 0.0
+
+    # ==========================
+    # 1. Mengisi Sheet A
+    # ==========================
+    if ws_a:
+        # Header
+        safe_set_cell(ws_a, 5, 19, nama_bulan) # S5 (Bulan)
+        safe_set_cell(ws_a, 6, 19, sample_year) # S6 (Tahun)
+        
+        # Mapping kolom intensitas (A-J -> Kolom 1-10)
+        col_map_a_intensitas = {
+            'hellman_5mnt': 1, 'hellman_10mnt': 2, 'hellman_15mnt': 3,
+            'hellman_30mnt': 4, 'hellman_45mnt': 5, 'hellman_60mnt': 6,
+            'hellman_120mnt': 7, 'hellman_3jam': 8, 'hellman_6jam': 9,
+            'hellman_12jam': 10
+        }
+        
+        # Mapping kolom jam-jaman (L-AI -> Kolom 12-35)
+        col_map_a_jam = {
+            'hellman_07_08': 12, 'hellman_08_09': 13, 'hellman_09_10': 14, 'hellman_10_11': 15,
+            'hellman_11_12': 16, 'hellman_12_13': 17, 'hellman_13_14': 18, 'hellman_14_15': 19,
+            'hellman_15_16': 20, 'hellman_16_17': 21, 'hellman_17_18': 22, 'hellman_18_19': 23,
+            'hellman_19_20': 24, 'hellman_20_21': 25, 'hellman_21_22': 26, 'hellman_22_23': 27,
+            'hellman_23_24': 28, 'hellman_24_01': 29, 'hellman_01_02': 30, 'hellman_02_03': 31,
+            'hellman_03_04': 32, 'hellman_04_05': 33, 'hellman_05_06': 34, 'hellman_06_07': 35
+        }
+
+        # Clear isi sebelumnya di row 12-42
+        for r in range(12, 43):
+            for c in range(1, 36):
+                safe_set_cell(ws_a, r, c, None)
+                
+        # Menyiapkan dictionary untuk melacak nilai max dan tanggalnya
+        max_values = {k: {'val': -1, 'date': None} for k in col_map_a_intensitas.keys()}
+
+        for _, row in df_records.iterrows():
+            day = row['day']
+            target_row = 11 + day # Baris 12 (tgl 1) s.d 42 (tgl 31)
+
+            # Isi Intensitas
+            for col_name, col_idx in col_map_a_intensitas.items():
+                val = to_num(row.get(col_name, 0))
+                safe_set_cell(ws_a, target_row, col_idx, val if val > 0 else 0)
+                
+                # Update max value
+                if val > max_values[col_name]['val']:
+                    max_values[col_name]['val'] = val
+                    max_values[col_name]['date'] = day
+
+            # Isi Jam-jaman
+            for col_name, col_idx in col_map_a_jam.items():
+                val = to_num(row.get(col_name, 0))
+                safe_set_cell(ws_a, target_row, col_idx, val if val > 0 else 0)
+                
+        # Tulis tanggal max value di baris 44
+        for col_name, col_idx in col_map_a_intensitas.items():
+            max_date = max_values[col_name]['date']
+            safe_set_cell(ws_a, 44, col_idx, max_date if max_date else "")
+
+    # ==========================
+    # 2. Mengisi Sheet B 1
+    # ==========================
+    if ws_b1:
+        safe_set_cell(ws_b1, 5, 17, nama_bulan) # Q5
+        safe_set_cell(ws_b1, 6, 17, sample_year) # Q6
+        
+        # B s.d Y (Kolom 2 s.d 25)
+        col_map_b1_jam = {
+            'hellman_07_08': 2, 'hellman_08_09': 3, 'hellman_09_10': 4, 'hellman_10_11': 5,
+            'hellman_11_12': 6, 'hellman_12_13': 7, 'hellman_13_14': 8, 'hellman_14_15': 9,
+            'hellman_15_16': 10, 'hellman_16_17': 11, 'hellman_17_18': 12, 'hellman_18_19': 13,
+            'hellman_19_20': 14, 'hellman_20_21': 15, 'hellman_21_22': 16, 'hellman_22_23': 17,
+            'hellman_23_24': 18, 'hellman_24_01': 19, 'hellman_01_02': 20, 'hellman_02_03': 21,
+            'hellman_03_04': 22, 'hellman_04_05': 23, 'hellman_05_06': 24, 'hellman_06_07': 25
+        }
+        
+        for r in range(12, 43):
+            for c in range(2, 26):
+                safe_set_cell(ws_b1, r, c, None)
+                
+        for _, row in df_records.iterrows():
+            day = row['day']
+            target_row = 11 + day # Baris 12 s.d 42
+            
+            for col_name, col_idx in col_map_b1_jam.items():
+                val = to_num(row.get(col_name, 0))
+                safe_set_cell(ws_b1, target_row, col_idx, val if val > 0 else 0)
+
+    # ==========================
+    # 3. Mengisi Sheet B 2
+    # ==========================
+    if ws_b2:
+        # Pemetaan Sheet B2 (E-M -> Kolom 5-13)
+        col_map_b2_intensitas = {
+            'hellman_5mnt': 5, 'hellman_10mnt': 6, 'hellman_15mnt': 7,
+            'hellman_30mnt': 8, 'hellman_45mnt': 9, 'hellman_60mnt': 10,
+            'hellman_120mnt': 11, 'hellman_6jam': 12, 'hellman_12jam': 13
+        }
+        
+        for r in range(5, 36):
+            for c in range(5, 14):
+                safe_set_cell(ws_b2, r, c, None)
+                
+        for _, row in df_records.iterrows():
+            day = row['day']
+            target_row = 4 + day # Baris 5 s.d 35
+            
+            for col_name, col_idx in col_map_b2_intensitas.items():
+                val = to_num(row.get(col_name, 0))
+                safe_set_cell(ws_b2, target_row, col_idx, val if val > 0 else 0)
+
+    return wb
+
+
+# ==========================================
 # ======== ANTARMUKA WEB STREAMLIT =========
 # ==========================================
 # --- SIDEBAR MENU ---
@@ -1028,11 +1161,12 @@ menu = st.sidebar.radio(
         "WXREV Converter", 
         "Thunderstorm Exporter", 
         "Form Perawanan Exporter",
-        "Form Komponen Angin, UWI, dan UWII"
+        "Form Komponen Angin, UWI, dan UWII",
+        "Form A/B Penakar Hujan"
     ]
 )
 st.sidebar.markdown("---")
-st.sidebar.info("Aplikasi ekstraksi data Sandi Cuaca (METAR, SPECI, WXREV, Thunderstorm, Perawanan, & Pibal) menjadi Laporan PDF & Excel otomatis.")
+st.sidebar.info("Aplikasi ekstraksi data Sandi Cuaca (METAR, SPECI, WXREV, Thunderstorm, Perawanan, Pibal, & Hujan Hellman) menjadi Laporan PDF & Excel otomatis.")
 
 LOGO_FILE = "logo_bmkg.png"
 
@@ -1386,5 +1520,68 @@ elif menu == "Form Komponen Angin, UWI, dan UWII":
                     file_name=f"Rekap_Udara_Atas_{nama_bulan}_{sample_year}.zip",
                     mime="application/zip",
                 )
+            except Exception as e:
+                st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
+
+# --- HALAMAN FORM A/B PENAKAR HUJAN ---
+elif menu == "Form A/B Penakar Hujan":
+    st.title("🌧️ Form A/B Penakar Hujan (Hellman)")
+    st.write("Ekstraksi data CSV Hujan Hellman ke Template Excel Form A, B1, dan B2.")
+    
+    DEFAULT_TEMPLATE_AB = "TEMPLATE FORM A B.xlsx"
+    
+    uploaded_file = st.file_uploader("Upload File CSV Hujan Hellman", type=["csv"])
+    
+    if uploaded_file:
+        if not os.path.exists(DEFAULT_TEMPLATE_AB):
+            st.error(f"❌ File '{DEFAULT_TEMPLATE_AB}' tidak ditemukan di folder aplikasi! Pastikan file berada pada direktori yang sama dengan skrip ini.")
+        else:
+            try:
+                # 1. Baca CSV (Skip baris pertama yang isinya hanya judul)
+                df = pd.read_csv(uploaded_file, skiprows=1)
+                
+                # 2. Validasi Kolom Timestamp
+                if 'data_timestamp' not in df.columns:
+                    st.error("Kolom 'data_timestamp' tidak ditemukan dalam file CSV.")
+                else:
+                    with st.spinner("Memproses data..."):
+                        # Extract Tanggal, Bulan, Tahun
+                        df['datetime'] = pd.to_datetime(df['data_timestamp'])
+                        df['day'] = df['datetime'].dt.day
+                        df['month'] = df['datetime'].dt.month
+                        df['year'] = df['datetime'].dt.year
+                        
+                        # Loop Per Bulan dan Tahun untuk membuat file Excel terpisah per bulan
+                        grouped_month = df.groupby(['year', 'month'])
+                        
+                        zip_buffer = io.BytesIO()
+                        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                            file_count = 0
+                            
+                            for (year, month), group in grouped_month:
+                                nama_bulan = BULAN_INDO[month]
+                                df_records = group.sort_values('day').reset_index(drop=True)
+                                
+                                # Muat template baru setiap iterasi bulan
+                                wb_ab = openpyxl.load_workbook(DEFAULT_TEMPLATE_AB)
+                                wb_ab = process_form_ab(wb_ab, df_records, nama_bulan, year)
+                                
+                                excel_buffer = io.BytesIO()
+                                wb_ab.save(excel_buffer)
+                                excel_buffer.seek(0)
+                                
+                                file_name = f"Form_AB_{nama_bulan}_{year}.xlsx"
+                                zip_file.writestr(file_name, excel_buffer.getvalue())
+                                file_count += 1
+                                
+                        st.success(f"✅ Berhasil memproses data untuk {file_count} bulan.")
+                        
+                        zip_buffer.seek(0)
+                        st.download_button(
+                            label="⬇️ Download Hasil Form A/B (Bentuk ZIP)",
+                            data=zip_buffer,
+                            file_name="Rekap_Form_AB_Hellman.zip",
+                            mime="application/zip",
+                        )
             except Exception as e:
                 st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
