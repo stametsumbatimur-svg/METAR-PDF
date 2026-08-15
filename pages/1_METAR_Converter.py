@@ -1159,7 +1159,7 @@ def process_form_ab(wb, df_hellman, df_penguapan, nama_bulan, sample_year, num_d
         # Masukkan Nilai Pengukuran OBS (rr_0700) dari CSV Penguapan ke Kolom B
         if df_penguapan is not None and not df_penguapan.empty:
             for _, row in df_penguapan.iterrows():
-                day = row['day']
+                day = row['day'] + 1
                 if day > num_days: continue
                 val = get_val_special(row.get('rr_0700', 0))
                 safe_set_cell(ws_b2, 4 + day, 2, val if val != 0 else 0)
@@ -1193,17 +1193,18 @@ def process_template_penguapan(wb, df_records, nama_bulan, sample_year, num_days
     safe_set_cell(ws, 2, 7, f":  {sample_year}")
     safe_set_cell(ws, 3, 7, f":  {nama_bulan}")
     
-    # Area Cleaning
+    # Cleaning
     for d in range(16, 32):
         if d > num_days:
             r = d - 5 
-            safe_set_cell(ws, r, 7, "-")  # G
-            safe_set_cell(ws, r, 8, "-")  # H
-            safe_set_cell(ws, r, 15, "-") # O
-            safe_set_cell(ws, r, 16, "-") # P
+            safe_set_cell(ws, r, 7, "-")  
+            safe_set_cell(ws, r, 8, "-")  
+            safe_set_cell(ws, r, 15, "-") 
+            safe_set_cell(ws, r, 16, "-") 
             
     for _, row in df_records.iterrows():
-        day = row['day']
+        # PERBAIKAN: Geser tanggal pengamatan +1 hari sesuai standar laporan operasional
+        day = row['day'] + 1 
         if day > num_days: continue
         
         diff = get_val_special(row.get('op_diff_baca_0700', 0))
@@ -1213,16 +1214,16 @@ def process_template_penguapan(wb, df_records, nama_bulan, sample_year, num_days
         
         if day <= 15:
             r = 10 + day
-            safe_set_cell(ws, r, 2, diff) # B
-            safe_set_cell(ws, r, 3, rr)   # C
-            safe_set_cell(ws, r, 12, ws_avg) # L
-            safe_set_cell(ws, r, 13, t_air)  # M
+            safe_set_cell(ws, r, 2, diff)   # Kolom B
+            safe_set_cell(ws, r, 3, rr)     # Kolom C
+            safe_set_cell(ws, r, 12, ws_avg)# Kolom L
+            safe_set_cell(ws, r, 13, t_air) # Kolom M
         else:
-            r = day - 5 # 16 -> 11
-            safe_set_cell(ws, r, 7, diff) # G
-            safe_set_cell(ws, r, 8, rr)   # H
-            safe_set_cell(ws, r, 15, ws_avg) # O
-            safe_set_cell(ws, r, 16, t_air)  # P
+            r = day - 5 # Tgl 16 -> Baris 11
+            safe_set_cell(ws, r, 7, diff)   # Kolom G
+            safe_set_cell(ws, r, 8, rr)     # Kolom H
+            safe_set_cell(ws, r, 15, ws_avg)# Kolom O
+            safe_set_cell(ws, r, 16, t_air) # Kolom P
             
     return wb
 
