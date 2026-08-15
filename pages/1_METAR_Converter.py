@@ -1018,12 +1018,15 @@ def process_template_komponen(wb, df_records, nama_bulan, sample_year):
 # ==========================================
 # ===== FORM A/B HUJAN HELLMAN FUNCTIONS ===
 # ==========================================
-def process_form_ab(wb, df_records, nama_bulan, sample_year):
+def process_form_ab(wb, df_records, nama_bulan, sample_year, sample_month_num):
     """
     Memproses data curah hujan ke dalam Template Form A, B1, dan B2
     wb: Objek Workbook openpyxl (TEMPLATE FORM A B.xlsx)
     df_records: DataFrame pandas yang sudah difilter per bulan
     """
+    # Menghitung jumlah hari pada bulan yang sedang diproses
+    num_days = calendar.monthrange(sample_year, sample_month_num)[1]
+
     ws_a = wb['A'] if 'A' in wb.sheetnames else None
     ws_b1 = wb['B 1'] if 'B 1' in wb.sheetnames else None
     ws_b2 = wb['B 2'] if 'B 2' in wb.sheetnames else None
@@ -1061,17 +1064,27 @@ def process_form_ab(wb, df_records, nama_bulan, sample_year):
             'hellman_03_04': 32, 'hellman_04_05': 33, 'hellman_05_06': 34, 'hellman_06_07': 35
         }
 
-        # Clear isi sebelumnya di row 12-42
-        for r in range(12, 43):
-            for c in range(1, 36):
-                safe_set_cell(ws_a, r, c, None)
+        # Clear isi sebelumnya dan Tulis Tanggal di Kolom K (Kolom 11)
+        for d in range(1, 32):
+            r = 11 + d # Baris 12 (tgl 1) s.d 42 (tgl 31)
+            if d <= num_days:
+                safe_set_cell(ws_a, r, 11, d)
+                for c in range(1, 36):
+                    if c == 11: continue
+                    safe_set_cell(ws_a, r, c, None)
+            else:
+                safe_set_cell(ws_a, r, 11, "-")
+                for c in range(1, 36):
+                    if c == 11: continue
+                    safe_set_cell(ws_a, r, c, "-")
                 
         # Menyiapkan dictionary untuk melacak nilai max dan tanggalnya
-        max_values = {k: {'val': -1, 'date': None} for k in col_map_a_intensitas.keys()}
+        max_values_a = {k: {'val': -0.0001, 'date': "-"} for k in col_map_a_intensitas.keys()}
 
         for _, row in df_records.iterrows():
             day = row['day']
-            target_row = 11 + day # Baris 12 (tgl 1) s.d 42 (tgl 31)
+            if day > num_days: continue
+            target_row = 11 + day 
 
             # Isi Intensitas
             for col_name, col_idx in col_map_a_intensitas.items():
@@ -1079,19 +1092,19 @@ def process_form_ab(wb, df_records, nama_bulan, sample_year):
                 safe_set_cell(ws_a, target_row, col_idx, val if val > 0 else 0)
                 
                 # Update max value
-                if val > max_values[col_name]['val']:
-                    max_values[col_name]['val'] = val
-                    max_values[col_name]['date'] = day
+                if val > max_values_a[col_name]['val']:
+                    max_values_a[col_name]['val'] = val
+                    max_values_a[col_name]['date'] = day
 
             # Isi Jam-jaman
             for col_name, col_idx in col_map_a_jam.items():
                 val = to_num(row.get(col_name, 0))
                 safe_set_cell(ws_a, target_row, col_idx, val if val > 0 else 0)
                 
-        # Tulis tanggal max value di baris 44
+        # Tulis tanggal max value di baris 44 (Kolom A-J)
         for col_name, col_idx in col_map_a_intensitas.items():
-            max_date = max_values[col_name]['date']
-            safe_set_cell(ws_a, 44, col_idx, max_date if max_date else "")
+            date_val = max_values_a[col_name]['date']
+            safe_set_cell(ws_a, 44, col_idx, date_val if date_val != "-" else "")
 
     # ==========================
     # 2. Mengisi Sheet B 1
@@ -1110,13 +1123,19 @@ def process_form_ab(wb, df_records, nama_bulan, sample_year):
             'hellman_03_04': 22, 'hellman_04_05': 23, 'hellman_05_06': 24, 'hellman_06_07': 25
         }
         
+        # Area Cleaning & Formatting
         for r in range(12, 43):
+            d = r - 11
             for c in range(2, 26):
-                safe_set_cell(ws_b1, r, c, None)
+                if d <= num_days:
+                    safe_set_cell(ws_b1, r, c, None)
+                else:
+                    safe_set_cell(ws_b1, r, c, "-")
                 
         for _, row in df_records.iterrows():
             day = row['day']
-            target_row = 11 + day # Baris 12 s.d 42
+            if day > num_days: continue
+            target_row = 11 + day 
             
             for col_name, col_idx in col_map_b1_jam.items():
                 val = to_num(row.get(col_name, 0))
@@ -1133,17 +1152,36 @@ def process_form_ab(wb, df_records, nama_bulan, sample_year):
             'hellman_120mnt': 11, 'hellman_6jam': 12, 'hellman_12jam': 13
         }
         
+        # Area Cleaning & Formatting
         for r in range(5, 36):
+            d = r - 4
             for c in range(5, 14):
-                safe_set_cell(ws_b2, r, c, None)
+                if d <= num_days:
+                    safe_set_cell(ws_b2, r, c, None)
+                else:
+                    safe_set_cell(ws_b2, r, c, "-")
+
+        # Menyiapkan dictionary untuk melacak nilai max dan tanggalnya
+        max_values_b2 = {k: {'val': -0.0001, 'date': "-"} for k in col_map_b2_intensitas.keys()}
                 
         for _, row in df_records.iterrows():
             day = row['day']
-            target_row = 4 + day # Baris 5 s.d 35
+            if day > num_days: continue
+            target_row = 4 + day 
             
             for col_name, col_idx in col_map_b2_intensitas.items():
                 val = to_num(row.get(col_name, 0))
                 safe_set_cell(ws_b2, target_row, col_idx, val if val > 0 else 0)
+                
+                # Update max value
+                if val > max_values_b2[col_name]['val']:
+                    max_values_b2[col_name]['val'] = val
+                    max_values_b2[col_name]['date'] = day
+                    
+        # Tulis tanggal max value di baris 37 (Kolom E-M)
+        for col_name, col_idx in col_map_b2_intensitas.items():
+            date_val = max_values_b2[col_name]['date']
+            safe_set_cell(ws_b2, 37, col_idx, date_val if date_val != "-" else "")
 
     return wb
 
@@ -1564,7 +1602,7 @@ elif menu == "Form A/B Penakar Hujan":
                                 
                                 # Muat template baru setiap iterasi bulan
                                 wb_ab = openpyxl.load_workbook(DEFAULT_TEMPLATE_AB)
-                                wb_ab = process_form_ab(wb_ab, df_records, nama_bulan, year)
+                                wb_ab = process_form_ab(wb_ab, df_records, nama_bulan, year, month)
                                 
                                 excel_buffer = io.BytesIO()
                                 wb_ab.save(excel_buffer)
