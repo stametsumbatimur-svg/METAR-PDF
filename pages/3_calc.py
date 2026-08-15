@@ -157,82 +157,96 @@ def find_best_historical_match(input_ddd, input_ff, input_month, df):
 
 # --- FUNGSI CORE GENERATOR DENGAN SANITASI KETAT ANGIN <= 25 KT ---
 def run_generation_core(target_readings, surf_ddd, surf_ff, month_idx, fresh=False):
+    # Jika mode fresh (buat baru dari awal) ATAU belum ada data sebelumnya
     if fresh or not st.session_state.generated_records:
         st.session_state.generated_records = []
         st.session_state.hodo_points = []
         st.session_state.last_idx = 0
         st.session_state.active_row = 1
         st.session_state.sandi_text = ""
+        start_idx = 1
+    else:
+        # MODE LANJUTKAN: Mulai dari baris setelah data terakhir yang tersimpan
+        start_idx = st.session_state.last_idx + 1
 
     if target_readings <= st.session_state.last_idx:
         st.warning(f"Data sudah ter-generate sebanyak {st.session_state.last_idx} baris. Naikkan target untuk melanjutkan.")
         return
 
-    match_ts, match_dt, hist_ddd, hist_ff = None, None, surf_ddd, surf_ff
-    hist_rows = []
-    
-    if df_historical is not None:
-        match_res = find_best_historical_match(surf_ddd, surf_ff, month_idx, df_historical)
-        if match_res:
-            match_ts, match_dt, hist_ddd, hist_ff = match_res
-            hist_rows = df_historical[df_historical['data_timestamp'] == match_ts].sort_values('pembacaan').to_dict('records')
-            
-            # Cek ketersediaan sandi pibal di file Data Pibal
-            if df_pibal_layers is not None:
-                sandi_match = df_pibal_layers[(df_pibal_layers['data_timestamp'] == match_ts) & (df_pibal_layers['sandi_pibal'].notna())]
-                if not sandi_match.empty:
-                    st.session_state.sandi_text = sandi_match.iloc[0]['sandi_pibal']
-
-            dt_str = match_dt.strftime('%d %B %Y %H:%M UTC')
-            st.session_state.matched_info = f"📌 **Pola Berdasarkan Data Historis Riil:** {dt_str} (Angin Permukaan Historis: {hist_ddd:.0f}° / {hist_ff:.0f} kt)"
+    # Pencocokan historis dilakukan jika baru mulai
+    if fresh or 'match_ts' not in st.session_state:
+        if df_historical is not None:
+            match_res = find_best_historical_match(surf_ddd, surf_ff, month_idx, df_historical)
+            if match_res:
+                match_ts, match_dt, hist_ddd, hist_ff = match_res
+                st.session_state.match_ts = match_ts
+                dt_str = match_dt.strftime('%d %B %Y %H:%M UTC')
+                st.session_state.matched_info = f"📌 **Pola Berdasarkan Data Historis Riil:** {dt_str} ({hist_ddd:.0f}° / {hist_ff:.0f} kt)"
+                if df_pibal_layers is not None:
+                    s_match = df_pibal_layers[(df_pibal_layers['data_timestamp'] == match_ts) & (df_pibal_layers['sandi_pibal'].notna())]
+                    if not s_match.empty:
+                        st.session_state.sandi_text = s_match.iloc[0]['sandi_pibal']
+            else:
+                st.session_state.matched_info = "📌 **Pola Simulasi Matematika (Fallback)**"
+                st.session_state.match_ts = None
         else:
-            st.session_state.matched_info = "📌 **Pola Simulasi Matematika (Fallback)**"
-    else:
-        st.session_state.matched_info = "📌 **Pola Simulasi Matematika (Dataset Tidak Ditemukan)**"
+            st.session_state.matched_info = "📌 **Pola Simulasi Matematika (Dataset Tidak Ditemukan)**"
+            st.session_state.match_ts = None
 
-    start_loop = st.session_state.last_idx + 1
+    hist_rows = []
+    if st.session_state.get('match_ts') and df_historical is not None:
+        hist_rows = df_historical[df_historical['data_timestamp'] == st.session_state.match_ts].sort_values('pembacaan').to_dict('records')
     hist_dict = {r['pembacaan']: r for r in hist_rows}
 
     rate_ft_min = 600.0
-    max_step_change_kt = 3.0  # Batas perubahan kecepatan antar layer agar grafik halus
+    max_step_change_kt = 2.5  # Pengetatan batas loncatan vektor per 500ft
     
-    curr_x, curr_y = 0.0, 0.0
-    
-    # Komponen angin permukaan (dibatasi maks 25 kt)
-    surf_ff_clean = min(surf_ff, MAX_WIND_SPEED_KT)
-    u_surf = -surf_ff_clean * math.sin(math.radians(surf_ddd))
-    v_surf = -surf_ff_clean * math.cos(math.radians(surf_ddd))
-    
-    prev_u, prev_v = u_surf, v_surf
+    # Inisialisasi/Melanjutkan memori vektor
+    if start_idx == 1:
+        surf_ff_clean = min(surf_ff, MAX_WIND_SPEED_KT)
+        u_surf = -surf_ff_clean * math.sin(math.radians(surf_ddd))
+        v_surf = -surf_ff_clean * math.cos(math.radians(surf_ddd))
+        prev_u, prev_v = u_surf, v_surf
+        curr_x, curr_y = 0.0, 0.0
+    else:
+        # Ambil state dari titik terakhir yang sudah tergenerate
+        last_hodo = st.session_state.hodo_points[-1]
+        prev_u, prev_v = last_hodo[0], last_hodo[1]
+        
+        # Hitung koordinat (x, y) terakhir berdasarkan azimuth & elevasi pembacaan terakhir
+        last_rec = st.session_state.generated_records[-1]
+        last_el = max(0.5, min(89.0, float(last_rec["ELEVASI"])))
+        last_az = float(last_rec["AZIMUT"])
+        last_h = 100.0 if st.session_state.last_idx == 1 else (st.session_state.last_idx - 1) * 500.0
+        d_last = last_h / math.tan(math.radians(last_el))
+        curr_x = d_last * math.sin(math.radians(last_az))
+        curr_y = d_last * math.cos(math.radians(last_az))
 
-    for idx in range(1, target_readings + 1):
+    for idx in range(start_idx, target_readings + 1):
         target_level = math.ceil((idx - 1) / 2) * 1000 if idx > 1 else 0
         level_target_str = "Diabaikan (Rilis)" if idx == 1 else f"Level {target_level} ft"
         height_above_stn = 100.0 if idx == 1 else (idx - 1) * 500.0
         
-        # 1. Ambil nilai azimut & elevasi mentah
-        if idx <= len(st.session_state.generated_records):
-            existing_rec = st.session_state.generated_records[idx - 1]
-            raw_az = float(existing_rec["AZIMUT"])
-            raw_el = float(existing_rec["ELEVASI"])
-        elif idx in hist_dict:
+        if idx in hist_dict:
             raw_az = hist_dict[idx]['azimuth']
             raw_el = hist_dict[idx]['elevasi']
         else:
-            if len(hist_rows) > 0:
-                last_r = hist_rows[-1]
-                delta_idx = idx - last_r['pembacaan']
-                raw_az = (last_r['azimuth'] + delta_idx * random.uniform(-0.5, 0.5)) % 360
-                raw_el = max(1.5, last_r['elevasi'] - delta_idx * random.uniform(0.1, 0.3))
+            # Ekstrapolasi mulus dari tren 2 pembacaan terakhir
+            if len(st.session_state.generated_records) >= 2:
+                rec_last = st.session_state.generated_records[-1]
+                rec_prev = st.session_state.generated_records[-2]
+                delta_el = float(rec_last["ELEVASI"]) - float(rec_prev["ELEVASI"])
+                delta_az = float(rec_last["AZIMUT"]) - float(rec_prev["AZIMUT"])
+                
+                raw_az = (float(rec_last["AZIMUT"]) + delta_az * 0.5) % 360
+                raw_el = max(1.0, float(rec_last["ELEVASI"]) + min(-0.1, delta_el * 0.8))
             else:
-                raw_az = (surf_ddd + random.uniform(-5, 5)) % 360
+                raw_az = (surf_ddd + random.uniform(-2, 2)) % 360
                 raw_el = max(5.0, 45.0 - idx * 1.2)
 
         if idx == 1:
             clean_az, clean_el = raw_az, raw_el
-            curr_x, curr_y = 0.0, 0.0
-            u_comp, v_comp = u_surf, v_surf
-            prev_u, prev_v = u_surf, v_surf
+            u_comp, v_comp = prev_u, prev_v
         else:
             prev_h = 100.0 if idx == 2 else (idx - 2) * 500.0
             dt = ((height_above_stn - prev_h) / rate_ft_min) * 60.0
@@ -247,12 +261,12 @@ def run_generation_core(target_readings, surf_ddd, surf_ff, month_idx, fresh=Fal
             u_raw = (dx_raw / dt) / 1.68781
             v_raw = (dy_raw / dt) / 1.68781
             
-            # Low-Pass Filter (Smoothing)
-            alpha = 0.25
+            # Smoothing vektor
+            alpha = 0.20
             u_smooth = alpha * u_raw + (1 - alpha) * prev_u
             v_smooth = alpha * v_raw + (1 - alpha) * prev_v
             
-            # Batasi Step-Change Vector
+            # Batasi Step-Change Vector (mencegah grafik zig-zag)
             du = u_smooth - prev_u
             dv = v_smooth - prev_v
             delta_spd = math.hypot(du, dv)
@@ -261,7 +275,7 @@ def run_generation_core(target_readings, surf_ddd, surf_ff, month_idx, fresh=Fal
                 u_smooth = prev_u + du * scale
                 v_smooth = prev_v + dv * scale
             
-            # BATASI MAKSIMUM KECEPATAN ANGIN PER LAYER <= 25 KT
+            # Batasi Kecepatan Maksimum <= 25 kt
             total_spd = math.hypot(u_smooth, v_smooth)
             if total_spd > MAX_WIND_SPEED_KT:
                 scale = MAX_WIND_SPEED_KT / total_spd
@@ -271,32 +285,26 @@ def run_generation_core(target_readings, surf_ddd, surf_ff, month_idx, fresh=Fal
             u_comp, v_comp = u_smooth, v_smooth
             prev_u, prev_v = u_smooth, v_smooth
             
-            # Recalculate Azimuth & Elevasi
+            # Perbarui Posisi Mulus
             dx_clean = u_comp * 1.68781 * dt
             dy_clean = v_comp * 1.68781 * dt
             curr_x += dx_clean
             curr_y += dy_clean
             
             d_clean = math.hypot(curr_x, curr_y)
-            if d_clean > 0:
-                clean_az = math.degrees(math.atan2(curr_x, curr_y)) % 360
-                clean_el = math.degrees(math.atan2(height_above_stn, d_clean))
-            else:
-                clean_az, clean_el = raw_az, raw_el
+            clean_az = math.degrees(math.atan2(curr_x, curr_y)) % 360
+            clean_el = math.degrees(math.atan2(height_above_stn, d_clean))
 
-        # Simpan Hasil
-        if idx >= start_loop:
-            height_display = "Awal" if idx == 1 else f"{int(height_above_stn)} ft"
-            st.session_state.generated_records.append({
-                "Pembacaan Ke-": idx,
-                "Tinggi Balon (ft)": height_display,
-                "Level Target (BMKG)": level_target_str,
-                "AZIMUT": round(clean_az, 1),
-                "ELEVASI": round(clean_el, 1)
-            })
+        height_display = "Awal" if idx == 1 else f"{int(height_above_stn)} ft"
+        st.session_state.generated_records.append({
+            "Pembacaan Ke-": idx,
+            "Tinggi Balon (ft)": height_display,
+            "Level Target (BMKG)": level_target_str,
+            "AZIMUT": round(clean_az, 1),
+            "ELEVASI": round(clean_el, 1)
+        })
 
-        if idx >= start_loop or fresh:
-            st.session_state.hodo_points.append((u_comp, v_comp, idx))
+        st.session_state.hodo_points.append((u_comp, v_comp, idx))
 
     st.session_state.last_idx = target_readings
     st.session_state.active_row = target_readings
