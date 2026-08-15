@@ -1015,38 +1015,37 @@ def process_template_komponen(wb, df_records, nama_bulan, sample_year):
                         safe_set_cell(ws_target, target_row, col_mapping[layer][1], int(f))
     return wb
 
-# ==========================================
-# ===== FORM A/B HUJAN HELLMAN FUNCTIONS ===
-# ==========================================
-def process_form_ab(wb, df_records, nama_bulan, sample_year, sample_month_num):
-    """
-    Memproses data curah hujan ke dalam Template Form A, B1, dan B2
-    wb: Objek Workbook openpyxl (TEMPLATE FORM A B.xlsx)
-    df_records: DataFrame pandas yang sudah difilter per bulan
-    """
-    # Menghitung jumlah hari pada bulan yang sedang diproses
-    num_days = calendar.monthrange(sample_year, sample_month_num)[1]
+# =========================================================
+# ===== FORM A/B HUJAN HELLMAN & PENGUAPAN FUNCTIONS ======
+# =========================================================
 
+def get_val_special(val):
+    """Fungsi helper khusus yang merubah 8888 -> TTU dan 9999 -> - """
+    try:
+        if pd.isna(val): return 0
+        v = float(val)
+        if v == 8888: return "TTU"
+        if v == 9999: return "-"
+        if v == int(v): return int(v)
+        return v
+    except:
+        return 0
+
+def process_form_ab(wb, df_hellman, df_penguapan, nama_bulan, sample_year, num_days):
+    """
+    Memproses data curah hujan & penguapan ke dalam Template Form A, B1, dan B2
+    """
     ws_a = wb['A'] if 'A' in wb.sheetnames else None
     ws_b1 = wb['B 1'] if 'B 1' in wb.sheetnames else None
     ws_b2 = wb['B 2'] if 'B 2' in wb.sheetnames else None
-
-    # Helper function untuk memastikan format angka
-    def to_num(val):
-        try:
-            return float(val) if pd.notna(val) else 0.0
-        except:
-            return 0.0
 
     # ==========================
     # 1. Mengisi Sheet A
     # ==========================
     if ws_a:
-        # Header
         safe_set_cell(ws_a, 5, 19, nama_bulan) # S5 (Bulan)
         safe_set_cell(ws_a, 6, 19, sample_year) # S6 (Tahun)
         
-        # Mapping kolom intensitas (A-J -> Kolom 1-10)
         col_map_a_intensitas = {
             'hellman_5mnt': 1, 'hellman_10mnt': 2, 'hellman_15mnt': 3,
             'hellman_30mnt': 4, 'hellman_45mnt': 5, 'hellman_60mnt': 6,
@@ -1054,7 +1053,6 @@ def process_form_ab(wb, df_records, nama_bulan, sample_year, sample_month_num):
             'hellman_12jam': 10
         }
         
-        # Mapping kolom jam-jaman (L-AI -> Kolom 12-35)
         col_map_a_jam = {
             'hellman_07_08': 12, 'hellman_08_09': 13, 'hellman_09_10': 14, 'hellman_10_11': 15,
             'hellman_11_12': 16, 'hellman_12_13': 17, 'hellman_13_14': 18, 'hellman_14_15': 19,
@@ -1066,7 +1064,7 @@ def process_form_ab(wb, df_records, nama_bulan, sample_year, sample_month_num):
 
         # Clear isi sebelumnya dan Tulis Tanggal di Kolom K (Kolom 11)
         for d in range(1, 32):
-            r = 11 + d # Baris 12 (tgl 1) s.d 42 (tgl 31)
+            r = 11 + d # Baris 12 s.d 42
             if d <= num_days:
                 safe_set_cell(ws_a, r, 11, d)
                 for c in range(1, 36):
@@ -1078,30 +1076,26 @@ def process_form_ab(wb, df_records, nama_bulan, sample_year, sample_month_num):
                     if c == 11: continue
                     safe_set_cell(ws_a, r, c, "-")
                 
-        # Menyiapkan dictionary untuk melacak nilai max dan tanggalnya
         max_values_a = {k: {'val': -0.0001, 'date': "-"} for k in col_map_a_intensitas.keys()}
 
-        for _, row in df_records.iterrows():
-            day = row['day']
-            if day > num_days: continue
-            target_row = 11 + day 
+        if df_hellman is not None and not df_hellman.empty:
+            for _, row in df_hellman.iterrows():
+                day = row['day']
+                if day > num_days: continue
+                target_row = 11 + day 
 
-            # Isi Intensitas
-            for col_name, col_idx in col_map_a_intensitas.items():
-                val = to_num(row.get(col_name, 0))
-                safe_set_cell(ws_a, target_row, col_idx, val if val > 0 else 0)
-                
-                # Update max value
-                if val > max_values_a[col_name]['val']:
-                    max_values_a[col_name]['val'] = val
-                    max_values_a[col_name]['date'] = day
+                for col_name, col_idx in col_map_a_intensitas.items():
+                    val = get_val_special(row.get(col_name, 0))
+                    safe_set_cell(ws_a, target_row, col_idx, val if val != 0 else 0)
+                    if isinstance(val, (int, float)):
+                        if val > max_values_a[col_name]['val']:
+                            max_values_a[col_name]['val'] = val
+                            max_values_a[col_name]['date'] = day
 
-            # Isi Jam-jaman
-            for col_name, col_idx in col_map_a_jam.items():
-                val = to_num(row.get(col_name, 0))
-                safe_set_cell(ws_a, target_row, col_idx, val if val > 0 else 0)
-                
-        # Tulis tanggal max value di baris 44 (Kolom A-J)
+                for col_name, col_idx in col_map_a_jam.items():
+                    val = get_val_special(row.get(col_name, 0))
+                    safe_set_cell(ws_a, target_row, col_idx, val if val != 0 else 0)
+                    
         for col_name, col_idx in col_map_a_intensitas.items():
             date_val = max_values_a[col_name]['date']
             safe_set_cell(ws_a, 44, col_idx, date_val if date_val != "-" else "")
@@ -1113,7 +1107,6 @@ def process_form_ab(wb, df_records, nama_bulan, sample_year, sample_month_num):
         safe_set_cell(ws_b1, 5, 17, nama_bulan) # Q5
         safe_set_cell(ws_b1, 6, 17, sample_year) # Q6
         
-        # B s.d Y (Kolom 2 s.d 25)
         col_map_b1_jam = {
             'hellman_07_08': 2, 'hellman_08_09': 3, 'hellman_09_10': 4, 'hellman_10_11': 5,
             'hellman_11_12': 6, 'hellman_12_13': 7, 'hellman_13_14': 8, 'hellman_14_15': 9,
@@ -1123,7 +1116,6 @@ def process_form_ab(wb, df_records, nama_bulan, sample_year, sample_month_num):
             'hellman_03_04': 22, 'hellman_04_05': 23, 'hellman_05_06': 24, 'hellman_06_07': 25
         }
         
-        # Area Cleaning & Formatting
         for r in range(12, 43):
             d = r - 11
             for c in range(2, 26):
@@ -1132,59 +1124,107 @@ def process_form_ab(wb, df_records, nama_bulan, sample_year, sample_month_num):
                 else:
                     safe_set_cell(ws_b1, r, c, "-")
                 
-        for _, row in df_records.iterrows():
-            day = row['day']
-            if day > num_days: continue
-            target_row = 11 + day 
-            
-            for col_name, col_idx in col_map_b1_jam.items():
-                val = to_num(row.get(col_name, 0))
-                safe_set_cell(ws_b1, target_row, col_idx, val if val > 0 else 0)
+        if df_hellman is not None and not df_hellman.empty:
+            for _, row in df_hellman.iterrows():
+                day = row['day']
+                if day > num_days: continue
+                target_row = 11 + day 
+                for col_name, col_idx in col_map_b1_jam.items():
+                    val = get_val_special(row.get(col_name, 0))
+                    safe_set_cell(ws_b1, target_row, col_idx, val if val != 0 else 0)
 
     # ==========================
     # 3. Mengisi Sheet B 2
     # ==========================
     if ws_b2:
-        # Pemetaan Sheet B2 (E-M -> Kolom 5-13)
         col_map_b2_intensitas = {
             'hellman_5mnt': 5, 'hellman_10mnt': 6, 'hellman_15mnt': 7,
             'hellman_30mnt': 8, 'hellman_45mnt': 9, 'hellman_60mnt': 10,
             'hellman_120mnt': 11, 'hellman_6jam': 12, 'hellman_12jam': 13
         }
         
-        # Area Cleaning & Formatting
         for r in range(5, 36):
             d = r - 4
+            if d <= num_days:
+                safe_set_cell(ws_b2, r, 2, None) # Clear Kolom B (Pengukuran OBS)
+            else:
+                safe_set_cell(ws_b2, r, 2, "-")
+                
             for c in range(5, 14):
                 if d <= num_days:
                     safe_set_cell(ws_b2, r, c, None)
                 else:
                     safe_set_cell(ws_b2, r, c, "-")
 
-        # Menyiapkan dictionary untuk melacak nilai max dan tanggalnya
+        # Masukkan Nilai Pengukuran OBS (rr_0700) dari CSV Penguapan ke Kolom B
+        if df_penguapan is not None and not df_penguapan.empty:
+            for _, row in df_penguapan.iterrows():
+                day = row['day']
+                if day > num_days: continue
+                val = get_val_special(row.get('rr_0700', 0))
+                safe_set_cell(ws_b2, 4 + day, 2, val if val != 0 else 0)
+
         max_values_b2 = {k: {'val': -0.0001, 'date': "-"} for k in col_map_b2_intensitas.keys()}
                 
-        for _, row in df_records.iterrows():
-            day = row['day']
-            if day > num_days: continue
-            target_row = 4 + day 
-            
-            for col_name, col_idx in col_map_b2_intensitas.items():
-                val = to_num(row.get(col_name, 0))
-                safe_set_cell(ws_b2, target_row, col_idx, val if val > 0 else 0)
+        if df_hellman is not None and not df_hellman.empty:
+            for _, row in df_hellman.iterrows():
+                day = row['day']
+                if day > num_days: continue
+                target_row = 4 + day 
                 
-                # Update max value
-                if val > max_values_b2[col_name]['val']:
-                    max_values_b2[col_name]['val'] = val
-                    max_values_b2[col_name]['date'] = day
+                for col_name, col_idx in col_map_b2_intensitas.items():
+                    val = get_val_special(row.get(col_name, 0))
+                    safe_set_cell(ws_b2, target_row, col_idx, val if val != 0 else 0)
                     
-        # Tulis tanggal max value di baris 37 (Kolom E-M)
+                    if isinstance(val, (int, float)):
+                        if val > max_values_b2[col_name]['val']:
+                            max_values_b2[col_name]['val'] = val
+                            max_values_b2[col_name]['date'] = day
+                    
         for col_name, col_idx in col_map_b2_intensitas.items():
             date_val = max_values_b2[col_name]['date']
             safe_set_cell(ws_b2, 37, col_idx, date_val if date_val != "-" else "")
 
     return wb
 
+def process_template_penguapan(wb, df_records, nama_bulan, sample_year, num_days):
+    ws = wb['Penguapan'] if 'Penguapan' in wb.sheetnames else wb.active
+    
+    safe_set_cell(ws, 2, 7, f":  {sample_year}")
+    safe_set_cell(ws, 3, 7, f":  {nama_bulan}")
+    
+    # Area Cleaning
+    for d in range(16, 32):
+        if d > num_days:
+            r = d - 5 
+            safe_set_cell(ws, r, 7, "-")  # G
+            safe_set_cell(ws, r, 8, "-")  # H
+            safe_set_cell(ws, r, 15, "-") # O
+            safe_set_cell(ws, r, 16, "-") # P
+            
+    for _, row in df_records.iterrows():
+        day = row['day']
+        if day > num_days: continue
+        
+        diff = get_val_special(row.get('op_diff_baca_0700', 0))
+        rr = get_val_special(row.get('rr_0700', 0))
+        ws_avg = get_val_special(row.get('ws_avg_50cm_0700', 0))
+        t_air = get_val_special(row.get('t_air_avg_0700', 0))
+        
+        if day <= 15:
+            r = 10 + day
+            safe_set_cell(ws, r, 2, diff) # B
+            safe_set_cell(ws, r, 3, rr)   # C
+            safe_set_cell(ws, r, 12, ws_avg) # L
+            safe_set_cell(ws, r, 13, t_air)  # M
+        else:
+            r = day - 5 # 16 -> 11
+            safe_set_cell(ws, r, 7, diff) # G
+            safe_set_cell(ws, r, 8, rr)   # H
+            safe_set_cell(ws, r, 15, ws_avg) # O
+            safe_set_cell(ws, r, 16, t_air)  # P
+            
+    return wb
 
 # ==========================================
 # ======== ANTARMUKA WEB STREAMLIT =========
@@ -1200,11 +1240,11 @@ menu = st.sidebar.radio(
         "Thunderstorm Exporter", 
         "Form Perawanan Exporter",
         "Form Komponen Angin, UWI, dan UWII",
-        "Form A/B Penakar Hujan"
+        "Form A/B Penakar Hujan dan Penguapan"
     ]
 )
 st.sidebar.markdown("---")
-st.sidebar.info("Aplikasi ekstraksi data Sandi Cuaca (METAR, SPECI, WXREV, Thunderstorm, Perawanan, Pibal, & Hujan Hellman) menjadi Laporan PDF & Excel otomatis.")
+st.sidebar.info("Aplikasi ekstraksi data Sandi Cuaca (METAR, SPECI, WXREV, Thunderstorm, Perawanan, Pibal, & Hujan/Penguapan) menjadi Laporan PDF & Excel otomatis.")
 
 LOGO_FILE = "logo_bmkg.png"
 
@@ -1561,64 +1601,100 @@ elif menu == "Form Komponen Angin, UWI, dan UWII":
             except Exception as e:
                 st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
 
-# --- HALAMAN FORM A/B PENAKAR HUJAN ---
-elif menu == "Form A/B Penakar Hujan":
-    st.title("🌧️ Form A/B Penakar Hujan (Hellman)")
-    st.write("Ekstraksi data CSV Hujan Hellman ke Template Excel Form A, B1, dan B2.")
+# --- HALAMAN FORM A/B PENAKAR HUJAN & PENGUAPAN ---
+elif menu == "Form A/B Penakar Hujan dan Penguapan":
+    st.title("🌧️ Form A/B Penakar Hujan dan Penguapan")
+    st.write("Ekstraksi data CSV Hujan Hellman & OP Penguapan ke Template Excel secara otomatis.")
     
     DEFAULT_TEMPLATE_AB = "TEMPLATE FORM A B.xlsx"
+    DEFAULT_TEMPLATE_PENGUAPAN = "TEMPLATE PENGUAPAN.xlsx"
     
-    uploaded_file = st.file_uploader("Upload File CSV Hujan Hellman", type=["csv"])
+    uploaded_files = st.file_uploader("Upload File CSV (Bisa Hujan Hellman saja, Penguapan saja, atau Keduanya)", type=["csv"], accept_multiple_files=True)
     
-    if uploaded_file:
-        if not os.path.exists(DEFAULT_TEMPLATE_AB):
-            st.error(f"❌ File '{DEFAULT_TEMPLATE_AB}' tidak ditemukan di folder aplikasi! Pastikan file berada pada direktori yang sama dengan skrip ini.")
+    if uploaded_files:
+        if not os.path.exists(DEFAULT_TEMPLATE_AB) or not os.path.exists(DEFAULT_TEMPLATE_PENGUAPAN):
+            st.error(f"❌ File '{DEFAULT_TEMPLATE_AB}' atau '{DEFAULT_TEMPLATE_PENGUAPAN}' tidak ditemukan di direktori aplikasi!")
         else:
             try:
-                # 1. Baca CSV (Skip baris pertama yang isinya hanya judul)
-                df = pd.read_csv(uploaded_file, skiprows=1)
+                df_hellman = pd.DataFrame()
+                df_penguapan = pd.DataFrame()
                 
-                # 2. Validasi Kolom Timestamp
-                if 'data_timestamp' not in df.columns:
-                    st.error("Kolom 'data_timestamp' tidak ditemukan dalam file CSV.")
+                # Deteksi tipe file yang diunggah
+                for file in uploaded_files:
+                    df_temp = pd.read_csv(file)
+                    if df_temp.shape[1] == 1: 
+                        file.seek(0)
+                        df_temp = pd.read_csv(file, skiprows=1)
+                        
+                    if 'hellman_5mnt' in df_temp.columns:
+                        df_hellman = df_temp
+                    elif 'op_eva_0700' in df_temp.columns:
+                        df_penguapan = df_temp
+                
+                if df_hellman.empty and df_penguapan.empty:
+                    st.error("Kolom data yang diperlukan tidak ditemukan pada file CSV yang diunggah.")
                 else:
                     with st.spinner("Memproses data..."):
-                        # Extract Tanggal, Bulan, Tahun
-                        df['datetime'] = pd.to_datetime(df['data_timestamp'])
-                        df['day'] = df['datetime'].dt.day
-                        df['month'] = df['datetime'].dt.month
-                        df['year'] = df['datetime'].dt.year
+                        all_ym = set()
                         
-                        # Loop Per Bulan dan Tahun untuk membuat file Excel terpisah per bulan
-                        grouped_month = df.groupby(['year', 'month'])
+                        if not df_hellman.empty:
+                            df_hellman['datetime'] = pd.to_datetime(df_hellman['data_timestamp'])
+                            df_hellman['day'] = df_hellman['datetime'].dt.day
+                            df_hellman['month'] = df_hellman['datetime'].dt.month
+                            df_hellman['year'] = df_hellman['datetime'].dt.year
+                            all_ym.update(zip(df_hellman['year'], df_hellman['month']))
+                            
+                        if not df_penguapan.empty:
+                            df_penguapan['datetime'] = pd.to_datetime(df_penguapan['data_timestamp'])
+                            df_penguapan['day'] = df_penguapan['datetime'].dt.day
+                            df_penguapan['month'] = df_penguapan['datetime'].dt.month
+                            df_penguapan['year'] = df_penguapan['datetime'].dt.year
+                            all_ym.update(zip(df_penguapan['year'], df_penguapan['month']))
                         
                         zip_buffer = io.BytesIO()
                         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                             file_count = 0
                             
-                            for (year, month), group in grouped_month:
+                            for year, month in sorted(list(all_ym)):
                                 nama_bulan = BULAN_INDO[month]
-                                df_records = group.sort_values('day').reset_index(drop=True)
+                                num_days = calendar.monthrange(year, month)[1]
                                 
-                                # Muat template baru setiap iterasi bulan
-                                wb_ab = openpyxl.load_workbook(DEFAULT_TEMPLATE_AB)
-                                wb_ab = process_form_ab(wb_ab, df_records, nama_bulan, year, month)
+                                df_h_month = pd.DataFrame()
+                                if not df_hellman.empty:
+                                    df_h_month = df_hellman[(df_hellman['year'] == year) & (df_hellman['month'] == month)].sort_values('day').reset_index(drop=True)
                                 
-                                excel_buffer = io.BytesIO()
-                                wb_ab.save(excel_buffer)
-                                excel_buffer.seek(0)
+                                df_p_month = pd.DataFrame()
+                                if not df_penguapan.empty:
+                                    df_p_month = df_penguapan[(df_penguapan['year'] == year) & (df_penguapan['month'] == month)].sort_values('day').reset_index(drop=True)
                                 
-                                file_name = f"Form_AB_{nama_bulan}_{year}.xlsx"
-                                zip_file.writestr(file_name, excel_buffer.getvalue())
+                                # Proses Form A/B
+                                if not df_h_month.empty or not df_p_month.empty:
+                                    wb_ab = openpyxl.load_workbook(DEFAULT_TEMPLATE_AB)
+                                    wb_ab = process_form_ab(wb_ab, df_h_month, df_p_month, nama_bulan, year, num_days)
+                                    excel_buffer_ab = io.BytesIO()
+                                    wb_ab.save(excel_buffer_ab)
+                                    excel_buffer_ab.seek(0)
+                                    zip_file.writestr(f"Form_AB_{nama_bulan}_{year}.xlsx", excel_buffer_ab.getvalue())
+                                
+                                # Proses Template Penguapan
+                                if not df_p_month.empty:
+                                    wb_peng = openpyxl.load_workbook(DEFAULT_TEMPLATE_PENGUAPAN)
+                                    wb_peng = process_template_penguapan(wb_peng, df_p_month, nama_bulan, year, num_days)
+                                    excel_buffer_peng = io.BytesIO()
+                                    wb_peng.save(excel_buffer_peng)
+                                    excel_buffer_peng.seek(0)
+                                    zip_file.writestr(f"Form_Penguapan_{nama_bulan}_{year}.xlsx", excel_buffer_peng.getvalue())
+                                    
                                 file_count += 1
                                 
-                        st.success(f"✅ Berhasil memproses data untuk {file_count} bulan.")
+                        st.success(f"✅ Berhasil memproses data untuk {file_count} siklus bulanan.")
+                        st.info("💡 Semua data yang telah diproses digabungkan menjadi file zip yang rapih di bawah.")
                         
                         zip_buffer.seek(0)
                         st.download_button(
-                            label="⬇️ Download Hasil Form A/B (Bentuk ZIP)",
+                            label="⬇️ Download Hasil Form (Bentuk ZIP)",
                             data=zip_buffer,
-                            file_name="Rekap_Form_AB_Hellman.zip",
+                            file_name="Rekap_Hujan_Penguapan_Otomatis.zip",
                             mime="application/zip",
                         )
             except Exception as e:
