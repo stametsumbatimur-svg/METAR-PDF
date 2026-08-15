@@ -16,52 +16,76 @@ st.set_page_config(
 )
 
 elevation_waingapu = 32.8
+MAX_WIND_SPEED_KT = 25.0  # Batas maksimum ketat kecepatan angin (ws <= 25 kt)
 
-# --- LOAD DATASET HISTORIS UMBU MEHANG KUNDA ---
+# --- LOAD DAN GABUNGKAN SECOND DATASET HISTORIS ---
 @st.cache_data
 def load_historical_pibal():
-    target_filename = 'Raw Pibal 2024-01-01 to 2026-07-21.csv'
+    fn_raw = 'Raw Pibal 2024-05-15 to 2026-08-16.csv'
+    fn_data = 'Data Pibal 2024-05-15 to 2026-08-16.csv'
     
-    # Daftar kandidat lokasi pencarian file
-    possible_paths = [
-        target_filename,                                                # Folder kerja utama
-        os.path.join(os.path.dirname(__file__), '..', target_filename), # Root dari folder pages/
-        os.path.join(os.path.dirname(__file__), target_filename),      # Didalam folder pages/
-    ]
-    
-    final_path = None
-    for path in possible_paths:
-        if os.path.exists(path):
-            final_path = path
-            break
-            
-    if not final_path:
-        st.warning(f"⚠️ File dataset historis (`{target_filename}`) belum ada di repositori GitHub.")
+    def find_file(filename):
+        possible_paths = [
+            filename,
+            os.path.join(os.path.dirname(__file__), '..', filename),
+            os.path.join(os.path.dirname(__file__), filename),
+        ]
+        for path in possible_paths:
+            if os.path.exists(path):
+                return path
         return None
+
+    path_raw = find_file(fn_raw)
+    path_data = find_file(fn_data)
+    
+    if not path_raw:
+        st.warning(f"⚠️ File raw dataset (`{fn_raw}`) tidak ditemukan.")
+        return None, None
 
     try:
-        with open(final_path, 'r') as f:
+        # 1. BACA & SANITASI RAW PIBAL (Azimuth & Elevasi Per Menit)
+        with open(path_raw, 'r') as f:
             first_line = f.readline()
-        skip = 1 if 'Raw Pibal' in first_line else 0
-        df = pd.read_csv(final_path, skiprows=skip)
+        skip_raw = 1 if 'Raw Pibal' in first_line else 0
+        df_raw = pd.read_csv(path_raw, skiprows=skip_raw)
         
-        # Pembersihan Data Mentah
-        df = df.dropna(subset=['azimuth', 'elevasi']).copy()
-        df = df[(df['azimuth'] != 9999) & (df['elevasi'] != 9999)]
-        df['pembacaan'] = df['pembacaan'].astype(int)
-        df['azimuth'] = df['azimuth'].astype(float)
-        df['elevasi'] = df['elevasi'].astype(float)
-        df['wind_dir_surface'] = df['wind_dir_surface'].astype(float)
-        df['wind_speed_surface'] = df['wind_speed_surface'].astype(float)
+        df_raw = df_raw.dropna(subset=['azimuth', 'elevasi']).copy()
+        df_raw = df_raw[(df_raw['azimuth'] != 9999) & (df_raw['elevasi'] != 9999)]
         
-        df['datetime'] = pd.to_datetime(df['data_timestamp'])
-        df['month'] = df['datetime'].dt.month
-        return df
-    except Exception as e:
-        st.warning(f"Gagal membaca file dataset historis. Detail: {e}")
-        return None
+        # Konversi Tipe Data
+        df_raw['pembacaan'] = pd.to_numeric(df_raw['pembacaan'], errors='coerce')
+        df_raw['azimuth'] = pd.to_numeric(df_raw['azimuth'], errors='coerce')
+        df_raw['elevasi'] = pd.to_numeric(df_raw['elevasi'], errors='coerce')
+        df_raw['wind_dir_surface'] = pd.to_numeric(df_raw['wind_dir_surface'], errors='coerce')
+        df_raw['wind_speed_surface'] = pd.to_numeric(df_raw['wind_speed_surface'], errors='coerce')
+        
+        # FILTER KETAT: ws <= 25 knot
+        df_raw = df_raw[(df_raw['wind_speed_surface'] >= 0) & (df_raw['wind_speed_surface'] <= MAX_WIND_SPEED_KT)]
+        df_raw['datetime'] = pd.to_datetime(df_raw['data_timestamp'])
+        df_raw['month'] = df_raw['datetime'].dt.month
 
-df_historical = load_historical_pibal()
+        # 2. BACA & SANITASI DATA PIBAL (Vektor Angin Per Lapisan Standard & Sandi Pibal)
+        df_data = None
+        if path_data:
+            with open(path_data, 'r') as f:
+                first_line_d = f.readline()
+            skip_data = 1 if 'Data Pibal' in first_line_d else 0
+            df_data = pd.read_csv(path_data, skiprows=skip_data)
+            
+            df_data['lapisan'] = pd.to_numeric(df_data['lapisan'], errors='coerce')
+            df_data['wd'] = pd.to_numeric(df_data['wd'], errors='coerce')
+            df_data['ws'] = pd.to_numeric(df_data['ws'], errors='coerce')
+            
+            # FILTER KETAT ANGIN LAPISAN ATAS: ws <= 25 knot (membuang outlier > 60 kt & 542 kt)
+            df_data = df_data[(df_data['ws'].isna()) | (df_data['ws'] <= MAX_WIND_SPEED_KT)]
+
+        return df_raw, df_data
+
+    except Exception as e:
+        st.warning(f"Gagal membaca/mengolah file dataset historis. Detail: {e}")
+        return None, None
+
+df_historical, df_pibal_layers = load_historical_pibal()
 
 # --- INSTANSIASI STATE MEMORI SIMULASI ---
 if 'generated_records' not in st.session_state:
@@ -74,6 +98,8 @@ if 'matched_info' not in st.session_state:
     st.session_state.matched_info = ""
 if 'active_row' not in st.session_state:
     st.session_state.active_row = 1
+if 'sandi_text' not in st.session_state:
+    st.session_state.sandi_text = ""
 
 # --- FUNGSI CALLBACK NAVIGASI MOBILE ---
 def prev_row():
@@ -129,13 +155,14 @@ def find_best_historical_match(input_ddd, input_ff, input_month, df):
     
     return best_obs['data_timestamp'], best_obs['datetime'], best_obs['wind_dir_surface'], best_obs['wind_speed_surface']
 
-# --- FUNGSI CORE GENERATOR DATA DENGAN SMOOTHING & SANITASI FISIKA ---
+# --- FUNGSI CORE GENERATOR DENGAN SANITASI KETAT ANGIN <= 25 KT ---
 def run_generation_core(target_readings, surf_ddd, surf_ff, month_idx, fresh=False):
     if fresh or not st.session_state.generated_records:
         st.session_state.generated_records = []
         st.session_state.hodo_points = []
         st.session_state.last_idx = 0
         st.session_state.active_row = 1
+        st.session_state.sandi_text = ""
 
     if target_readings <= st.session_state.last_idx:
         st.warning(f"Data sudah ter-generate sebanyak {st.session_state.last_idx} baris. Naikkan target untuk melanjutkan.")
@@ -149,6 +176,13 @@ def run_generation_core(target_readings, surf_ddd, surf_ff, month_idx, fresh=Fal
         if match_res:
             match_ts, match_dt, hist_ddd, hist_ff = match_res
             hist_rows = df_historical[df_historical['data_timestamp'] == match_ts].sort_values('pembacaan').to_dict('records')
+            
+            # Cek ketersediaan sandi pibal di file Data Pibal
+            if df_pibal_layers is not None:
+                sandi_match = df_pibal_layers[(df_pibal_layers['data_timestamp'] == match_ts) & (df_pibal_layers['sandi_pibal'].notna())]
+                if not sandi_match.empty:
+                    st.session_state.sandi_text = sandi_match.iloc[0]['sandi_pibal']
+
             dt_str = match_dt.strftime('%d %B %Y %H:%M UTC')
             st.session_state.matched_info = f"📌 **Pola Berdasarkan Data Historis Riil:** {dt_str} (Angin Permukaan Historis: {hist_ddd:.0f}° / {hist_ff:.0f} kt)"
         else:
@@ -160,14 +194,14 @@ def run_generation_core(target_readings, surf_ddd, surf_ff, month_idx, fresh=Fal
     hist_dict = {r['pembacaan']: r for r in hist_rows}
 
     rate_ft_min = 600.0
-    max_allowed_speed_kt = 35.0  # Batas maksimum kecepatan angin per layer
-    max_step_change_kt = 3.5     # Batas perubahan kecepatan maksimum per layer (mencegah zig-zag)
+    max_step_change_kt = 3.0  # Batas perubahan kecepatan antar layer agar grafik halus
     
     curr_x, curr_y = 0.0, 0.0
     
-    # Komponen angin permukaan
-    u_surf = -surf_ff * math.sin(math.radians(surf_ddd))
-    v_surf = -surf_ff * math.cos(math.radians(surf_ddd))
+    # Komponen angin permukaan (dibatasi maks 25 kt)
+    surf_ff_clean = min(surf_ff, MAX_WIND_SPEED_KT)
+    u_surf = -surf_ff_clean * math.sin(math.radians(surf_ddd))
+    v_surf = -surf_ff_clean * math.cos(math.radians(surf_ddd))
     
     prev_u, prev_v = u_surf, v_surf
 
@@ -203,24 +237,22 @@ def run_generation_core(target_readings, surf_ddd, surf_ff, month_idx, fresh=Fal
             prev_h = 100.0 if idx == 2 else (idx - 2) * 500.0
             dt = ((height_above_stn - prev_h) / rate_ft_min) * 60.0
             
-            # Hitung posisi target ideal dari data mentah
             safe_el = max(0.5, min(89.0, raw_el))
             d_raw = height_above_stn / math.tan(math.radians(safe_el))
             x_raw_target = d_raw * math.sin(math.radians(raw_az))
             y_raw_target = d_raw * math.cos(math.radians(raw_az))
             
-            # Vektor kecepatan mentah per layer
             dx_raw = x_raw_target - curr_x
             dy_raw = y_raw_target - curr_y
             u_raw = (dx_raw / dt) / 1.68781
             v_raw = (dy_raw / dt) / 1.68781
             
-            # 2. FILTER SMOOTHING (Low-Pass Filter)
-            alpha = 0.25  # Bobot smoothing (35% data baru + 65% tren sebelumnya)
+            # Low-Pass Filter (Smoothing)
+            alpha = 0.25
             u_smooth = alpha * u_raw + (1 - alpha) * prev_u
             v_smooth = alpha * v_raw + (1 - alpha) * prev_v
             
-            # 3. BATASI PERUBAHAN VEKTOR BERLEBIHAN (Pencegah Zig-Zag)
+            # Batasi Step-Change Vector
             du = u_smooth - prev_u
             dv = v_smooth - prev_v
             delta_spd = math.hypot(du, dv)
@@ -229,17 +261,17 @@ def run_generation_core(target_readings, surf_ddd, surf_ff, month_idx, fresh=Fal
                 u_smooth = prev_u + du * scale
                 v_smooth = prev_v + dv * scale
             
-            # 4. BATASI KECEPATAN ANGIN MAKSIMUM PER LAYER
+            # BATASI MAKSIMUM KECEPATAN ANGIN PER LAYER <= 25 KT
             total_spd = math.hypot(u_smooth, v_smooth)
-            if total_spd > max_allowed_speed_kt:
-                scale = max_allowed_speed_kt / total_spd
+            if total_spd > MAX_WIND_SPEED_KT:
+                scale = MAX_WIND_SPEED_KT / total_spd
                 u_smooth *= scale
                 v_smooth *= scale
             
             u_comp, v_comp = u_smooth, v_smooth
             prev_u, prev_v = u_smooth, v_smooth
             
-            # 5. RE-KALKULASI AZIMUT/ELEVASI BERSIH AGAR MATCH DENGAN TABEL & GRAPH
+            # Recalculate Azimuth & Elevasi
             dx_clean = u_comp * 1.68781 * dt
             dy_clean = v_comp * 1.68781 * dt
             curr_x += dx_clean
@@ -252,7 +284,7 @@ def run_generation_core(target_readings, surf_ddd, surf_ff, month_idx, fresh=Fal
             else:
                 clean_az, clean_el = raw_az, raw_el
 
-        # Simpan hasil
+        # Simpan Hasil
         if idx >= start_loop:
             height_display = "Awal" if idx == 1 else f"{int(height_above_stn)} ft"
             st.session_state.generated_records.append({
@@ -269,7 +301,7 @@ def run_generation_core(target_readings, surf_ddd, surf_ff, month_idx, fresh=Fal
     st.session_state.last_idx = target_readings
     st.session_state.active_row = target_readings
 
-# --- LAYOUT DENGAN DUA KOLOM UTAMA ---
+# --- LAYOUT KANAN & KIRI ---
 col_left, col_right = st.columns([7, 5], gap="large")
 
 # === KOLOM KIRI: INPUT & TABEL DATA ===
@@ -281,7 +313,7 @@ with col_left:
         target_readings = st.number_input("Target Jumlah Pembacaan:", min_value=1, value=25, step=1)
         surf_ddd = st.number_input("Angin Permukaan ddd (°):", min_value=0.0, max_value=360.0, value=190.0, step=5.0)
     with c2:
-        surf_ff = st.number_input("Kec Angin Perm ff (kt):", min_value=0.0, value=5.0, step=1.0)
+        surf_ff = st.number_input("Kec Angin Perm ff (kt, Max 25):", min_value=0.0, max_value=25.0, value=5.0, step=1.0)
         selected_month = st.selectbox("Bulan Pengamatan:", list(range(1, 13)), index=current_month-1, 
                                       format_func=lambda x: datetime(2024, x, 1).strftime('%B'))
 
@@ -304,8 +336,17 @@ with col_left:
     st.subheader("📊 Tabel Hasil Pembacaan")
     
     if st.session_state.generated_records:
-        df = pd.DataFrame(st.session_state.generated_records)
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        df_result = pd.DataFrame(st.session_state.generated_records)
+        st.dataframe(df_result, use_container_width=True, hide_index=True)
+        
+        # Fitur Tambahan: Download CSV
+        csv_data = df_result.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Download Hasil Pembacaan (CSV)",
+            data=csv_data,
+            file_name=f"pibal_simulation_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+            mime='text/csv'
+        )
     else:
         st.info("Belum ada data yang dibuat. Atur parameter lalu pilih 'Generate dari Historis'.")
 
@@ -317,7 +358,8 @@ with col_right:
     ax.set_facecolor('#ffffff')
     ax.set_aspect('equal')
     
-    for knots in [10, 20, 30, 40]:
+    # Ring Hodograph disesuaikan dengan skala max 25-30 kt
+    for knots in [5, 10, 15, 20, 25]:
         circle = plt.Circle((0, 0), knots, color='#cbd5e1', fill=False, linestyle='-', linewidth=1)
         ax.add_patch(circle)
         ax.text(0, knots, f"{knots} kt", color='#64748b', fontsize=8, ha='center', va='center',
@@ -327,10 +369,10 @@ with col_right:
     ax.axvline(0, color='#94a3b8', linestyle='--', linewidth=0.8)
     
     c_props = dict(boxstyle='round,pad=0.3', facecolor='#0d3b66', edgecolor='none', alpha=0.9)
-    ax.text(0, 45, "U", weight='bold', ha='center', va='center', color='white', bbox=c_props)
-    ax.text(0, -45, "S", weight='bold', ha='center', va='center', color='white', bbox=c_props)
-    ax.text(45, 0, "T", weight='bold', ha='center', va='center', color='white', bbox=c_props)
-    ax.text(-45, 0, "B", weight='bold', ha='center', va='center', color='white', bbox=c_props)
+    ax.text(0, 28, "U", weight='bold', ha='center', va='center', color='white', bbox=c_props)
+    ax.text(0, -28, "S", weight='bold', ha='center', va='center', color='white', bbox=c_props)
+    ax.text(28, 0, "T", weight='bold', ha='center', va='center', color='white', bbox=c_props)
+    ax.text(-28, 0, "B", weight='bold', ha='center', va='center', color='white', bbox=c_props)
     
     if st.session_state.hodo_points:
         u_pts = [p[0] for p in st.session_state.hodo_points]
@@ -340,18 +382,23 @@ with col_right:
         colors = [cm.plasma(i/len(u_pts)) for i in range(len(u_pts))]
         ax.scatter(u_pts, v_pts, color=colors, edgecolor='white', s=55, zorder=2)
         
-        ax.plot(u_pts[0], v_pts[0], marker='s', color='#10b981', markersize=9, markeredgecolor='white', zorder=3, label='Mulai (Bawah)')
-        ax.plot(u_pts[-1], v_pts[-1], marker='X', color='#ef4444', markersize=10, markeredgecolor='white', zorder=3, label='Akhir (Atas)')
+        ax.plot(u_pts[0], v_pts[0], marker='s', color='#10b981', markersize=9, markeredgecolor='white', zorder=3, label='Mulai')
+        ax.plot(u_pts[-1], v_pts[-1], marker='X', color='#ef4444', markersize=10, markeredgecolor='white', zorder=3, label='Akhir')
         ax.legend(loc='lower right', fontsize=8, framealpha=0.9)
         
-    ax.set_xlim(-50, 50)
-    ax.set_ylim(-50, 50)
+    ax.set_xlim(-30, 30)
+    ax.set_ylim(-30, 30)
     ax.axis('off')
     
     st.pyplot(fig)
     plt.close(fig)
     
     st.caption(status_deteksi)
+    
+    if st.session_state.sandi_text:
+        with st.expander("📝 Referensi Sandi Pibal Historis (PPAA/PPBB)"):
+            st.code(st.session_state.sandi_text, language='text')
+
     st.markdown("---")
     
     # --- PANEL ASISTEN KETIK MANUAL ---
@@ -360,7 +407,6 @@ with col_right:
     if st.session_state.generated_records:
         total_rec = len(st.session_state.generated_records)
         
-        # PERBAIKAN BUG 2: Validasi nilai active_row agar tidak melebihi total_rec
         if st.session_state.active_row > total_rec:
             st.session_state.active_row = total_rec
         if st.session_state.active_row < 1:
