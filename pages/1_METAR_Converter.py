@@ -1020,7 +1020,7 @@ def process_template_komponen(wb, df_records, nama_bulan, sample_year):
 # =========================================================
 
 def get_val_special(val):
-    """Fungsi helper khusus yang merubah 8888 -> TTU dan 9999 -> - """
+    """Fungsi helper khusus merubah 8888 -> TTU dan 9999 -> - """
     try:
         if pd.isna(val): return 0
         v = float(val)
@@ -1032,9 +1032,6 @@ def get_val_special(val):
         return 0
 
 def process_form_ab(wb, df_hellman, df_penguapan, nama_bulan, sample_year, num_days):
-    """
-    Memproses data curah hujan & penguapan ke dalam Template Form A, B1, dan B2
-    """
     ws_a = wb['A'] if 'A' in wb.sheetnames else None
     ws_b1 = wb['B 1'] if 'B 1' in wb.sheetnames else None
     ws_b2 = wb['B 2'] if 'B 2' in wb.sheetnames else None
@@ -1157,14 +1154,18 @@ def process_form_ab(wb, df_hellman, df_penguapan, nama_bulan, sample_year, num_d
                     safe_set_cell(ws_b2, r, c, "-")
 
         # Masukkan Nilai Pengukuran OBS (rr_0700) dari CSV Penguapan ke Sheet B2 Kolom B
+        # PERBAIKAN OPERASIONAL: Lintas Bulan (Tanggal N-1)
         if df_penguapan is not None and not df_penguapan.empty:
             for _, row in df_penguapan.iterrows():
-                # PERBAIKAN: CSV Tanggal N dimasukkan ke Laporan Tanggal (N - 1)
-                target_day = row['day'] - 1
-                if target_day < 1 or target_day > num_days: 
-                    continue
-                val = get_val_special(row.get('rr_0700', 0))
-                safe_set_cell(ws_b2, 4 + target_day, 2, val if val != 0 else 0)
+                dt = row['datetime']
+                # Menggeser tanggal -1 hari
+                target_dt = dt - pd.Timedelta(days=1)
+                
+                # Cek jika tanggal target jatuh pada bulan dan tahun yang sedang diproses
+                if target_dt.month == df_penguapan['target_month'].iloc[0] and target_dt.year == df_penguapan['target_year'].iloc[0]:
+                    target_day = target_dt.day
+                    val = get_val_special(row.get('rr_0700', 0))
+                    safe_set_cell(ws_b2, 4 + target_day, 2, val if val != 0 else 0)
 
         max_values_b2 = {k: {'val': -0.0001, 'date': "-"} for k in col_map_b2_intensitas.keys()}
                 
@@ -1189,10 +1190,10 @@ def process_form_ab(wb, df_hellman, df_penguapan, nama_bulan, sample_year, num_d
 
     return wb
 
-def process_template_penguapan(wb, df_records, nama_bulan, sample_year, num_days):
+def process_template_penguapan(wb, df_penguapan_full, target_year, target_month, num_days, nama_bulan):
     ws = wb['Penguapan'] if 'Penguapan' in wb.sheetnames else wb.active
     
-    safe_set_cell(ws, 2, 7, f":  {sample_year}")
+    safe_set_cell(ws, 2, 7, f":  {target_year}")
     safe_set_cell(ws, 3, 7, f":  {nama_bulan}")
     
     # Area Cleaning Tanggal 16-31
@@ -1204,31 +1205,32 @@ def process_template_penguapan(wb, df_records, nama_bulan, sample_year, num_days
             safe_set_cell(ws, r, 15, "-") 
             safe_set_cell(ws, r, 16, "-") 
             
-    for _, row in df_records.iterrows():
-        # PERBAIKAN: CSV Tanggal N dimasukkan ke Laporan Tanggal (N - 1)
-        target_day = row['day'] - 1 
+    for _, row in df_penguapan_full.iterrows():
+        dt = row['datetime']
+        # LOGIKA PERBAIKAN: Pembacaan 07.00 WS tanggal N dimasukkan ke Laporan Tanggal N - 1 Hari
+        target_dt = dt - pd.Timedelta(days=1)
         
-        # Abaikan data CSV tanggal 1 bulan berjalan (karena dimasukkan ke tanggal 30/31 bulan sebelumnya)
-        if target_day < 1 or target_day > num_days: 
-            continue
-        
-        diff = get_val_special(row.get('op_diff_baca_0700', 0))
-        rr = get_val_special(row.get('rr_0700', 0))
-        ws_avg = get_val_special(row.get('ws_avg_50cm_0700', 0))
-        t_air = get_val_special(row.get('t_air_avg_0700', 0))
-        
-        if target_day <= 15:
-            r = 10 + target_day
-            safe_set_cell(ws, r, 2, diff)    # Beda Tinggi H (Kolom B)
-            safe_set_cell(ws, r, 3, rr)      # Hujan P (Kolom C)
-            safe_set_cell(ws, r, 12, ws_avg) # Kecepatan Angin (Kolom L)
-            safe_set_cell(ws, r, 13, t_air)  # Suhu Air (Kolom M)
-        else:
-            r = target_day - 5 # Tgl 16 -> Baris 11
-            safe_set_cell(ws, r, 7, diff)    # Beda Tinggi H (Kolom G)
-            safe_set_cell(ws, r, 8, rr)      # Hujan P (Kolom H)
-            safe_set_cell(ws, r, 15, ws_avg) # Kecepatan Angin (Kolom O)
-            safe_set_cell(ws, r, 16, t_air)  # Suhu Air (Kolom P)
+        # Pastikan data yang dimasukkan adalah yang berada pada bulan dan tahun laporan berjalan
+        if target_dt.month == target_month and target_dt.year == target_year:
+            target_day = target_dt.day
+            
+            diff = get_val_special(row.get('op_diff_baca_0700', 0))
+            rr = get_val_special(row.get('rr_0700', 0))
+            ws_avg = get_val_special(row.get('ws_avg_50cm_0700', 0))
+            t_air = get_val_special(row.get('t_air_avg_0700', 0))
+            
+            if target_day <= 15:
+                r = 10 + target_day
+                safe_set_cell(ws, r, 2, diff)    # Beda Tinggi H (Kolom B)
+                safe_set_cell(ws, r, 3, rr)      # Hujan P (Kolom C)
+                safe_set_cell(ws, r, 12, ws_avg) # Kecepatan Angin (Kolom L)
+                safe_set_cell(ws, r, 13, t_air)  # Suhu Air (Kolom M)
+            else:
+                r = target_day - 5 # Tgl 16 -> Baris 11
+                safe_set_cell(ws, r, 7, diff)    # Beda Tinggi H (Kolom G)
+                safe_set_cell(ws, r, 8, rr)      # Hujan P (Kolom H)
+                safe_set_cell(ws, r, 15, ws_avg) # Kecepatan Angin (Kolom O)
+                safe_set_cell(ws, r, 16, t_air)  # Suhu Air (Kolom P)
             
     return wb
 
@@ -1625,7 +1627,6 @@ elif menu == "Form A/B Penakar Hujan dan Penguapan":
                 df_hellman = pd.DataFrame()
                 df_penguapan = pd.DataFrame()
                 
-                # Deteksi tipe file yang diunggah
                 for file in uploaded_files:
                     df_temp = pd.read_csv(file)
                     if df_temp.shape[1] == 1: 
@@ -1655,7 +1656,13 @@ elif menu == "Form A/B Penakar Hujan dan Penguapan":
                             df_penguapan['day'] = df_penguapan['datetime'].dt.day
                             df_penguapan['month'] = df_penguapan['datetime'].dt.month
                             df_penguapan['year'] = df_penguapan['datetime'].dt.year
-                            all_ym.update(zip(df_penguapan['year'], df_penguapan['month']))
+                            
+                            # Tentukan target laporan bulan dari tanggal pengamatan - 1 hari
+                            df_penguapan['target_date'] = df_penguapan['datetime'] - pd.Timedelta(days=1)
+                            df_penguapan['target_month'] = df_penguapan['target_date'].dt.month
+                            df_penguapan['target_year'] = df_penguapan['target_date'].dt.year
+                            
+                            all_ym.update(zip(df_penguapan['target_year'], df_penguapan['target_month']))
                         
                         zip_buffer = io.BytesIO()
                         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
@@ -1671,7 +1678,10 @@ elif menu == "Form A/B Penakar Hujan dan Penguapan":
                                 
                                 df_p_month = pd.DataFrame()
                                 if not df_penguapan.empty:
-                                    df_p_month = df_penguapan[(df_penguapan['year'] == year) & (df_penguapan['month'] == month)].sort_values('day').reset_index(drop=True)
+                                    # Ambil rentang data penguapan yang relevan untuk bulan target (termasuk tgl 1 bulan berikutnya)
+                                    df_p_month = df_penguapan[
+                                        (df_penguapan['target_year'] == year) & (df_penguapan['target_month'] == month)
+                                    ].sort_values('datetime').reset_index(drop=True)
                                 
                                 # Proses Form A/B
                                 if not df_h_month.empty or not df_p_month.empty:
@@ -1685,7 +1695,7 @@ elif menu == "Form A/B Penakar Hujan dan Penguapan":
                                 # Proses Template Penguapan
                                 if not df_p_month.empty:
                                     wb_peng = openpyxl.load_workbook(DEFAULT_TEMPLATE_PENGUAPAN)
-                                    wb_peng = process_template_penguapan(wb_peng, df_p_month, nama_bulan, year, num_days)
+                                    wb_peng = process_template_penguapan(wb_peng, df_p_month, year, month, num_days, nama_bulan)
                                     excel_buffer_peng = io.BytesIO()
                                     wb_peng.save(excel_buffer_peng)
                                     excel_buffer_peng.seek(0)
