@@ -138,8 +138,8 @@ def generate_pdf_bytes_metar(df_clean, logo_path):
         if count > 0: story.append(PageBreak())
             
         nama_bulan = BULAN_INDO[date.month]
-        tanggal_format = f"{date.day:02d} {nama_bulan} {date.year}"
-        judul_rekap = f"REKAP DATA METAR: {tanggal_format}".upper()
+        tanggal_at = f"{date.day:02d} {nama_bulan} {date.year}"
+        judul_rekap = f"REKAP DATA METAR: {tanggal_at}".upper()
         text_block = [
             Paragraph("<b>BALAI BESAR METEOROLOGI KLIMATOLOGI DAN GEOFISIKA WILAYAH III</b>", header_text_style),
             Paragraph(f"<b>{nama_stasiun}</b>", header_text_style),
@@ -1028,7 +1028,7 @@ menu = st.sidebar.radio(
         "WXREV Converter", 
         "Thunderstorm Exporter", 
         "Form Perawanan Exporter",
-        "Pibal / Radiosonde Converter"
+        "Form A/B"
     ]
 )
 st.sidebar.markdown("---")
