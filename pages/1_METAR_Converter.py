@@ -1270,7 +1270,7 @@ elif menu == "Form Perawanan Exporter":
                 with col_xlsx: st.download_button(label="📊 Download Excel Perawanan", data=excel_data, file_name=f"PERAWANAN_{dt_min.strftime('%Y%m')}_{dt_max.strftime('%Y%m')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # --- HALAMAN PIBAL / RADIOSONDE ---
-elif menu == "Pibal / Radiosonde Converter":
+elif menu == "Form A/B":
     st.title("🎈 Otomatisasi Rekap Udara Atas (Pibal / Radiosonde)")
     st.subheader("Stasiun Meteorologi BMKG")
     st.markdown("---")
