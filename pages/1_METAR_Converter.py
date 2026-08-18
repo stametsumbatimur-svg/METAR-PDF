@@ -282,6 +282,10 @@ def generate_pdf_bytes_speci(df_clean, logo_path):
     return buffer
 
 def generate_excel_bytes_metar_speci(df_clean, report_type="METAR"):
+    """
+    Fungsi Fallback (Cadangan) jika Template Excel tidak ditemukan.
+    Akan meng-export data ke satu sheet standar dengan warna biru (Default Style).
+    """
     buffer = io.BytesIO()
     headers = ['TYPE', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK', 'datetime']
     df_export = df_clean[headers].copy()
@@ -310,6 +314,88 @@ def generate_excel_bytes_metar_speci(df_clean, report_type="METAR"):
             max_len = max([len(str(cell.value)) for cell in col if cell.value] + [0])
             worksheet.column_dimensions[get_column_letter(col[0].column)].width = max(max_len + 3, 11)
             
+    buffer.seek(0)
+    return buffer
+
+# ==========================================
+# ===== METAR TEMPLATE INSERTER FUNCTION ===
+# ==========================================
+def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3.xlsx"):
+    """
+    Fungsi untuk menyuntikkan data METAR ke dalam File Excel Berbasis Template.
+    """
+    if not os.path.exists(template_path):
+        for alt in ["TEMPLATE METAR.xlsx", "TEMPLATE METAR_2.xlsx", "TEMPLATE METAR_3.xlsx"]:
+            if os.path.exists(alt):
+                template_path = alt
+                break
+
+    buffer = io.BytesIO()
+    wb = openpyxl.load_workbook(template_path)
+    
+    if "Template" in wb.sheetnames:
+        ws_template = wb["Template"]
+    elif "TEMPLATE" in wb.sheetnames:
+        ws_template = wb["TEMPLATE"]
+    else:
+        ws_template = wb.active
+
+    df_clean['year'] = df_clean['datetime'].dt.year
+    df_clean['month'] = df_clean['datetime'].dt.month
+    df_clean['day'] = df_clean['datetime'].dt.day
+    df_clean['hour'] = df_clean['datetime'].dt.hour
+    
+    grouped_months = df_clean.groupby(['year', 'month'])
+    
+    for (year, month), month_group in grouped_months:
+        nama_bulan = BULAN_INDO[month]
+        sheet_name = f"{nama_bulan}"
+        
+        # Duplikasi template ke sheet bulanan
+        ws = wb.copy_worksheet(ws_template)
+        ws.title = sheet_name
+        
+        # Update nilai sel Tanggal (G4)
+        first_date_dt = datetime(year, month, 1)
+        ws['G4'].value = first_date_dt
+        
+        # Penulisan Data
+        for _, row in month_group.iterrows():
+            d = row['day']
+            h = row['hour']
+            target_row = 8 + (d - 1) * 24 + h # Dimulai dari Baris 8 (Sesuai Template)
+            
+            metar_type = str(row['TYPE']) if pd.notna(row['TYPE']) else 'METAR'
+            loc = str(row['LOC']) if pd.notna(row['LOC']) else 'WATU'
+            time_str = str(row['TIME']) if pd.notna(row['TIME']) else ''
+            wind = str(row['WIND']) if pd.notna(row['WIND']) else ''
+            vis = str(row['VIS']) if pd.notna(row['VIS']) else ''
+            wx = str(row['WX']) if pd.notna(row['WX']) else ''
+            cloud = str(row['CLOUD']) if pd.notna(row['CLOUD']) else ''
+            t_dp = str(row['T/DP']) if pd.notna(row['T/DP']) else ''
+            qnh = str(row['QNH']) if pd.notna(row['QNH']) else ''
+            rmk = str(row['RMK']) if pd.notna(row['RMK']) else ''
+            
+            if vis == 'CAVOK':
+                wx = ''
+                cloud = ''
+                
+            ws.cell(row=target_row, column=1, value=metar_type)
+            ws.cell(row=target_row, column=2, value=loc)
+            ws.cell(row=target_row, column=3, value=time_str)
+            ws.cell(row=target_row, column=4, value=wind)
+            ws.cell(row=target_row, column=5, value=int(vis) if vis.isdigit() else vis)
+            ws.cell(row=target_row, column=6, value=wx)
+            ws.cell(row=target_row, column=7, value=cloud)
+            ws.cell(row=target_row, column=8, value=t_dp)
+            ws.cell(row=target_row, column=9, value=qnh)
+            ws.cell(row=target_row, column=10, value=rmk)
+            
+    # Hapus sheet template master agar Excel tampak bersih
+    wb.remove(ws_template)
+    
+    # Save ke buffer
+    wb.save(buffer)
     buffer.seek(0)
     return buffer
 
@@ -1323,6 +1409,7 @@ if menu == "METAR Converter":
         st.markdown("""
         **Syarat File CSV:**
         - File hasil extract dari "https://bmkgsatu.bmkg.go.id/extractgts" data METAR dengan status SENT.
+        - Jika file `TEMPLATE METAR_3.xlsx` tersedia di direktori yang sama, program akan menggunakan format KOP Surat terstandar.
         """)
     uploaded_file = st.file_uploader("Upload file CSV METAR", type=["csv"])
     if uploaded_file is not None:
@@ -1358,7 +1445,15 @@ if menu == "METAR Converter":
                         else:
                             st.success(f"Berhasil memproses data METAR!")
                             pdf_data = generate_pdf_bytes_metar(df_clean, LOGO_FILE)
-                            excel_data = generate_excel_bytes_metar_speci(df_clean, report_type="METAR")
+                            
+                            # Cek Ketersediaan Template
+                            DEFAULT_TEMPLATE_METAR = "TEMPLATE METAR_3.xlsx"
+                            if os.path.exists(DEFAULT_TEMPLATE_METAR) or os.path.exists("TEMPLATE METAR_2.xlsx") or os.path.exists("TEMPLATE METAR.xlsx"):
+                                excel_data = generate_excel_from_template_metar(df_clean, template_path=DEFAULT_TEMPLATE_METAR)
+                            else:
+                                st.warning(f"⚠️ File '{DEFAULT_TEMPLATE_METAR}' tidak ditemukan. Menggunakan format Excel standar.")
+                                excel_data = generate_excel_bytes_metar_speci(df_clean, report_type="METAR")
+                            
                             first_date = df_clean['date_group'].iloc[0]
                             nama_file_base = f"REKAP_METAR_{first_date.day:02d}_{BULAN_INDO[first_date.month]}_{first_date.year}"
                             
