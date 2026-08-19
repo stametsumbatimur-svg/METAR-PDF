@@ -7,10 +7,6 @@ import calendar
 import zipfile
 import openpyxl
 from datetime import datetime
-from reportlab.lib.pagesizes import A4, landscape
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image, KeepTogether
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib import colors
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.cell.cell import MergedCell
@@ -30,7 +26,7 @@ BULAN_INDO = {
 }
 
 def safe_set_cell(ws, row, col, value):
-    """Mengatur nilai sel dengan aman, menghindari error jika sel ter-merge."""
+    """Mengatur nilai sel secara aman dari error MergedCell."""
     cell = ws.cell(row=row, column=col)
     if not isinstance(cell, MergedCell): 
         cell.value = value
@@ -576,12 +572,12 @@ def generate_excel_from_template_thunderstorm(df_clean, template_path="TEMPLATE 
         ws.title = "Sheet1"
         ws.cell(row=1, column=1, value="DATA THUNDERSTORM")
         ws.cell(row=2, column=1, value="STASIUN METEOROLOGI UMBU MEHANG KUNDA")
-        ws.cell(row=4, column=1, value="TANGGAL")
+        ws.cell(row=5, column=1, value="TANGGAL")
         for d in range(1, 32):
-            ws.cell(row=4, column=d+1, value=d)
-        ws.cell(row=5, column=1, value="BULAN")
+            ws.cell(row=5, column=d+1, value=d)
+        ws.cell(row=6, column=1, value="BULAN")
         for m in range(1, 13):
-            ws.cell(row=5+m, column=1, value=BULAN_INDO[m])
+            ws.cell(row=6+m, column=1, value=BULAN_INDO[m])
 
     thin_side = Side(style='thin', color='000000')
     thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
@@ -609,9 +605,9 @@ def generate_excel_from_template_thunderstorm(df_clean, template_path="TEMPLATE 
     for _, r in ts_dates.iterrows():
         matrix[r['month']][r['day']] = "X"
 
-    # 3. Pengisian Data Matriks ke Sel B6:AF17 (Menggunakan safe_set_cell)
+    # 3. Pengisian Data Matriks ke Sel B7:AF18 (Baris 7 = Januari, Baris 8 = Februari, dst.)
     for m in range(1, 13):
-        target_row = 6 + m  # Januari (m=1) -> Row 6
+        target_row = 6 + m  
         for d in range(1, 32):
             target_col = 1 + d  # Tanggal 1 (d=1) -> Kolom B (2)
             val = matrix[m][d]
@@ -628,182 +624,81 @@ def generate_excel_from_template_thunderstorm(df_clean, template_path="TEMPLATE 
     buffer.seek(0)
     return buffer
 
-def generate_pdf_bytes_perawanan(df_clean, station_name, kepala_nama, kepala_nip, form_code="Klim / PWN/WPU-2001"):
+# =========================================================
+# ===== FORM PERAWANAN GENERATOR (TEMPLATE MURNI) =========
+# =========================================================
+def generate_excel_from_template_perawanan(df_clean, template_path="TEMPLATE FORM PERAWANAN.xlsx"):
+    """
+    Mengisi data Ikhtisar Frekuensi Perawanan ke TEMPLATE FORM PERAWANAN.xlsx.
+    """
+    if not os.path.exists(template_path):
+        template_path = "TEMPLATE FORM PERAWANAN.xlsx"
+
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=25, bottomMargin=25)
-    story = []
+    wb = openpyxl.load_workbook(template_path)
     
-    styles = getSampleStyleSheet()
-    title_style = ParagraphStyle('PWNTitle', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=10, leading=13, alignment=1)
-    text_style = ParagraphStyle('PWNText', parent=styles['Normal'], fontName='Helvetica', fontSize=8, leading=11)
-    
+    if "Sheet1" in wb.sheetnames:
+        ws_template = wb["Sheet1"]
+    elif "TEMPLATE" in wb.sheetnames:
+        ws_template = wb["TEMPLATE"]
+    else:
+        ws_template = wb.active
+
     df_clean['year'] = df_clean['datetime'].dt.year
     df_clean['month'] = df_clean['datetime'].dt.month
     df_clean['day'] = df_clean['datetime'].dt.day
     df_clean['cat'] = df_clean.apply(lambda r: get_cloud_category(r['CLOUD'], r['VIS']), axis=1)
-    
+
     grouped_month = df_clean.groupby(['year', 'month'])
-    
-    for count_month, ((year, month), month_group) in enumerate(grouped_month):
-        if count_month > 0:
-            story.append(PageBreak())
-            
-        bulan_str = BULAN_INDO[month]
+
+    for (year, month), month_group in grouped_month:
+        nama_bulan = BULAN_INDO[month]
         num_days = calendar.monthrange(year, month)[1]
-        
-        story.append(Paragraph("DAFTAR IKHTISAR FREKUENSI PERAWANAN", title_style))
-        story.append(Paragraph(f"{station_name.upper()}", title_style))
-        story.append(Paragraph(f"BULAN {bulan_str} {year}", title_style))
-        story.append(Spacer(1, 10))
-        
-        header_row = ["TANGGAL", "CERAH\n(N=0)", "BERAWAN SEBAGIAN\n(N=1-3)", "BERAWAN\n(N=4-6)", "BERAWAN BANYAK\n(N=7-8)", "JUMLAH"]
-        table_data = [header_row]
-        
-        tot_cerah = tot_sebagian = tot_berawan = tot_banyak = tot_semua = 0
-        
-        for d in range(1, num_days + 1):
-            df_day = month_group[month_group['day'] == d]
-            counts = df_day['cat'].value_counts()
-            
-            c_cerah = counts.get('CERAH', 0)
-            c_sebagian = counts.get('BERAWAN_SEBAGIAN', 0)
-            c_berawan = counts.get('BERAWAN', 0)
-            c_banyak = counts.get('BERAWAN_BANYAK', 0)
-            c_total = len(df_day)
-            
-            tot_cerah += c_cerah
-            tot_sebagian += c_sebagian
-            tot_berawan += c_berawan
-            tot_banyak += c_banyak
-            tot_semua += c_total
-            
-            table_data.append([
-                f"{d:02d}", str(c_cerah) if c_cerah > 0 else "-", str(c_sebagian) if c_sebagian > 0 else "-",
-                str(c_berawan) if c_berawan > 0 else "-", str(c_banyak) if c_banyak > 0 else "-", str(c_total) if c_total > 0 else "-"
-            ])
-            
-        table_data.append(["JUMLAH", str(tot_cerah), str(tot_sebagian), str(tot_berawan), str(tot_banyak), str(tot_semua)])
-        
-        pct_c = f"{round((tot_cerah/tot_semua)*100)}%" if tot_semua > 0 else "0%"
-        pct_s = f"{round((tot_sebagian/tot_semua)*100)}%" if tot_semua > 0 else "0%"
-        pct_bw = f"{round((tot_berawan/tot_semua)*100)}%" if tot_semua > 0 else "0%"
-        pct_by = f"{round((tot_banyak/tot_semua)*100)}%" if tot_semua > 0 else "0%"
-        
-        table_data.append(["% - TAGE", pct_c, pct_s, pct_bw, pct_by, "100%" if tot_semua > 0 else "0%"])
-        
-        col_widths = [60, 90, 120, 100, 110, 60]
-        pwn_table = Table(table_data, colWidths=col_widths)
-        pwn_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey), ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'), ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'), ('FONTSIZE', (0, 0), (-1, -1), 7.5),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 2), ('TOPPADDING', (0, 0), (-1, -1), 2),
-            ('FONTNAME', (0, -2), (-1, -1), 'Helvetica-Bold'), ('BACKGROUND', (0, -2), (-1, -1), colors.whitesmoke),
-        ]))
-        
-        story.append(pwn_table)
-        story.append(Spacer(1, 15))
-        
-        tgl_sekarang = datetime.now()
-        tgl_ttd = f"WAINGAPU, {tgl_sekarang.day:02d} {BULAN_INDO[tgl_sekarang.month]} {tgl_sekarang.year}"
-        
-        form_text = f"FORM: {form_code}"
-        nip_str = f"<br/>NIP. {kepala_nip}" if kepala_nip else ""
-        ttd_text = f"""{tgl_ttd}<br/>
-        <b>KEPALA STASIUN METEOROLOGI</b><br/>
-        <b>{station_name.upper()}</b><br/><br/><br/><br/>
-        <b><u>{kepala_nama}</u></b>{nip_str}
-        """
-        
-        form_p = Paragraph(form_text, text_style)
-        ttd_p = Paragraph(ttd_text, ParagraphStyle('TTDPWN', parent=text_style, alignment=1))
-        
-        footer_table = Table([[form_p, ttd_p]], colWidths=[200, 340])
-        footer_table.setStyle(TableStyle([
-            ('VALIGN', (0, 0), (-1, -1), 'TOP'), ('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-        ]))
-        
-        story.append(KeepTogether(footer_table))
+        sheet_name = f"PWN {nama_bulan[:3]} {year}"[:31]
 
-    doc.build(story)
-    buffer.seek(0)
-    return buffer
+        ws = wb.copy_worksheet(ws_template)
+        ws.title = sheet_name
 
-def generate_excel_bytes_perawanan(df_clean, station_name):
-    buffer = io.BytesIO()
-    df_clean['year'] = df_clean['datetime'].dt.year
-    df_clean['month'] = df_clean['datetime'].dt.month
-    df_clean['day'] = df_clean['datetime'].dt.day
-    df_clean['cat'] = df_clean.apply(lambda r: get_cloud_category(r['CLOUD'], r['VIS']), axis=1)
-    
-    grouped_month = df_clean.groupby(['year', 'month'])
-    
-    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        for (year, month), month_group in grouped_month:
-            bulan_str = BULAN_INDO[month]
-            num_days = calendar.monthrange(year, month)[1]
-            rows_data = []
-            tot_cerah = tot_sebagian = tot_berawan = tot_banyak = tot_semua = 0
-            
-            for d in range(1, num_days + 1):
+        # Update Bulan & Tahun di Cell C4
+        safe_set_cell(ws, 4, 3, f":  {nama_bulan}   {year}")
+
+        # Isi Tanggal 1-31 di Baris 10 sampai 40
+        for d in range(1, 32):
+            r = 9 + d
+            if d <= num_days:
                 df_day = month_group[month_group['day'] == d]
                 counts = df_day['cat'].value_counts()
-                
+
                 c_cerah = counts.get('CERAH', 0)
                 c_sebagian = counts.get('BERAWAN_SEBAGIAN', 0)
                 c_berawan = counts.get('BERAWAN', 0)
                 c_banyak = counts.get('BERAWAN_BANYAK', 0)
-                c_total = len(df_day)
-                
-                tot_cerah += c_cerah; tot_sebagian += c_sebagian
-                tot_berawan += c_berawan; tot_banyak += c_banyak; tot_semua += c_total
-                
-                rows_data.append({
-                    'TANGGAL': f"{d:02d}",
-                    'CERAH (N=0)': c_cerah if c_cerah > 0 else "-",
-                    'BERAWAN SEBAGIAN (N=1-3)': c_sebagian if c_sebagian > 0 else "-",
-                    'BERAWAN (N=4-6)': c_berawan if c_berawan > 0 else "-",
-                    'BERAWAN BANYAK (N=7-8)': c_banyak if c_banyak > 0 else "-",
-                    'JUMLAH': c_total if c_total > 0 else "-"
-                })
-                
-            rows_data.append({
-                'TANGGAL': "JUMLAH", 'CERAH (N=0)': tot_cerah, 'BERAWAN SEBAGIAN (N=1-3)': tot_sebagian,
-                'BERAWAN (N=4-6)': tot_berawan, 'BERAWAN BANYAK (N=7-8)': tot_banyak, 'JUMLAH': tot_semua
-            })
-            
-            pct_c = f"{round((tot_cerah/tot_semua)*100)}%" if tot_semua > 0 else "0%"
-            pct_s = f"{round((tot_sebagian/tot_semua)*100)}%" if tot_semua > 0 else "0%"
-            pct_bw = f"{round((tot_berawan/tot_semua)*100)}%" if tot_semua > 0 else "0%"
-            pct_by = f"{round((tot_banyak/tot_semua)*100)}%" if tot_semua > 0 else "0%"
-            
-            rows_data.append({
-                'TANGGAL': "% - TAGE", 'CERAH (N=0)': pct_c, 'BERAWAN SEBAGIAN (N=1-3)': pct_s,
-                'BERAWAN (N=4-6)': pct_bw, 'BERAWAN BANYAK (N=7-8)': pct_by, 'JUMLAH': "100%" if tot_semua > 0 else "0%"
-            })
-            
-            df_pwn = pd.DataFrame(rows_data)
-            sheet_name = f"PWN {bulan_str[:3]} {year}"[:31]
-            
-            df_pwn.to_excel(writer, sheet_name=sheet_name, index=False)
-            worksheet = writer.sheets[sheet_name]
-            
-            header_font = Font(name='Segoe UI', size=10, bold=True, color='FFFFFF')
-            header_fill = PatternFill(start_color='1F4E78', end_color='1F4E78', fill_type='solid')
-            align_center = Alignment(horizontal='center', vertical='center')
-            thin_border = Border(left=Side(style='thin', color='D9D9D9'), right=Side(style='thin', color='D9D9D9'), top=Side(style='thin', color='D9D9D9'), bottom=Side(style='thin', color='D9D9D9'))
-            
-            for cell in worksheet[1]:
-                cell.font, cell.fill, cell.alignment, cell.border = header_font, header_fill, align_center, thin_border
-                
-            for row in worksheet.iter_rows(min_row=2, max_row=worksheet.max_row, min_col=1, max_col=worksheet.max_column):
-                for cell in row:
-                    cell.border, cell.font, cell.alignment = thin_border, Font(name='Segoe UI', size=10), align_center
-                    
-            for col in worksheet.columns:
-                max_len = max([len(str(cell.value)) for cell in col if cell.value] + [0])
-                worksheet.column_dimensions[get_column_letter(col[0].column)].width = max(max_len + 3, 12)
-            
+
+                safe_set_cell(ws, r, 2, c_cerah if c_cerah > 0 else "-")
+                safe_set_cell(ws, r, 3, c_sebagian if c_sebagian > 0 else "-")
+                safe_set_cell(ws, r, 4, c_berawan if c_berawan > 0 else "-")
+                safe_set_cell(ws, r, 5, c_banyak if c_banyak > 0 else "-")
+                safe_set_cell(ws, r, 6, f"=SUM(B{r}:E{r})")
+            else:
+                for c in range(2, 6):
+                    safe_set_cell(ws, r, c, "-")
+                safe_set_cell(ws, r, 6, "-")
+
+        # Rumus Total & Persentase (Baris 41 & 42)
+        safe_set_cell(ws, 41, 2, f"=SUM(B10:B{9+num_days})")
+        safe_set_cell(ws, 41, 3, f"=SUM(C10:C{9+num_days})")
+        safe_set_cell(ws, 41, 4, f"=SUM(D10:D{9+num_days})")
+        safe_set_cell(ws, 41, 5, f"=SUM(E10:E{9+num_days})")
+        safe_set_cell(ws, 41, 6, f"=SUM(F10:F{9+num_days})")
+
+        safe_set_cell(ws, 42, 2, f"=B41/{num_days}/24*100%")
+        safe_set_cell(ws, 42, 3, f"=C41/{num_days}/24*100%")
+        safe_set_cell(ws, 42, 4, f"=D41/{num_days}/24*100%")
+        safe_set_cell(ws, 42, 5, f"=E41/{num_days}/24*100%")
+        safe_set_cell(ws, 42, 6, f"=F41/{num_days}/24*100%")
+
+    wb.remove(ws_template)
+    wb.save(buffer)
     buffer.seek(0)
     return buffer
 
@@ -1579,12 +1474,10 @@ elif menu == "Thunderstorm Exporter":
 # --- HALAMAN FORM PERAWANAN EXPORTER ---
 elif menu == "Form Perawanan Exporter":
     st.title("☁️ Form Perawanan Exporter")
-    st.write("Ekstraksi data Ikhtisar Frekuensi Perawanan bulanan dari file METAR per jam.")
-    with st.expander("⚙️ Pengaturan Header, Form & Tanda Tangan PDF"):
-        st_nama = st.text_input("Nama Stasiun", "STASIUN METEOROLOGI UMBU MEHANG KUNDA", key="pwn_st")
-        form_code = st.text_input("Kode Form (Pojok Kiri Bawah)", "Klim / PWN/WPU-2001")
-        kp_nama = st.text_input("Nama Kepala Stasiun", "CARLES ALEXANDER TARI, S.TP", key="pwn_kp")
-        kp_nip = st.text_input("NIP Kepala Stasiun", "197712082001121001", key="pwn_nip")
+    st.write("Ekstraksi data Ikhtisar Frekuensi Perawanan bulanan dari file METAR per jam langsung ke TEMPLATE FORM PERAWANAN.xlsx.")
+    
+    DEFAULT_TEMPLATE_PWN = "TEMPLATE FORM PERAWANAN.xlsx"
+    
     uploaded_files = st.file_uploader("Upload File CSV METAR", type=["csv"], accept_multiple_files=True, key="pwn_uploader")
     if uploaded_files:
         all_rows = []
@@ -1595,10 +1488,12 @@ elif menu == "Form Perawanan Exporter":
                     for idx, row in df.iterrows():
                         res = parse_metar_speci(row['sandi'])
                         if res and res[0] == 'METAR':
-                            station = row['station_name'] if 'station_name' in df.columns else st_nama
+                            station = row['station_name'] if 'station_name' in df.columns else "STASIUN METEOROLOGI"
                             msg_id = row['id'] if 'id' in df.columns else idx
                             all_rows.append(res + [row['data_timestamp'], station, msg_id])
-            except Exception as e: st.error(f"Gagal membaca file {file.name}: {e}")
+            except Exception as e: 
+                st.error(f"Gagal membaca file {file.name}: {e}")
+                
         if all_rows:
             columns = ['TYPE', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK', 'is_cor', 'cc_type', 'raw_timestamp', 'station_name', 'msg_id']
             df_clean = pd.DataFrame(all_rows, columns=columns)
@@ -1609,17 +1504,24 @@ elif menu == "Form Perawanan Exporter":
             df_clean = df_clean.sort_values(by=['datetime', 'priority_score', 'msg_id'])
             df_clean = df_clean.drop_duplicates(subset=['datetime'], keep='last')
             df_clean = df_clean.sort_values(by='datetime').reset_index(drop=True)
-            if df_clean.empty: st.warning("Tidak ditemukan data METAR dengan menit :00 di dalam file ini.")
+            
+            if df_clean.empty: 
+                st.warning("Tidak ditemukan data METAR dengan menit :00 di dalam file ini.")
             else:
-                pdf_data = generate_pdf_bytes_perawanan(df_clean, st_nama, kp_nama, kp_nip, form_code)
-                excel_data = generate_excel_bytes_perawanan(df_clean, st_nama)
+                excel_data = generate_excel_from_template_perawanan(df_clean, template_path=DEFAULT_TEMPLATE_PWN)
                 months_count = len(df_clean.groupby([df_clean['datetime'].dt.year, df_clean['datetime'].dt.month]))
-                dt_min = df_clean['datetime'].min(); dt_max = df_clean['datetime'].max()
+                dt_min = df_clean['datetime'].min()
+                dt_max = df_clean['datetime'].max()
+                
                 st.success(f"Berhasil memproses Data Perawanan untuk {months_count} bulan ({dt_min.strftime('%b %Y')} - {dt_max.strftime('%b %Y')})!")
                 st.write("---")
-                col_pdf, col_xlsx = st.columns(2)
-                with col_pdf: st.download_button(label="📥 Download PDF Perawanan", data=pdf_data, file_name=f"PERAWANAN_{dt_min.strftime('%Y%m')}_{dt_max.strftime('%Y%m')}.pdf", mime="application/pdf")
-                with col_xlsx: st.download_button(label="📊 Download Excel Perawanan", data=excel_data, file_name=f"PERAWANAN_{dt_min.strftime('%Y%m')}_{dt_max.strftime('%Y%m')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                
+                st.download_button(
+                    label="📊 Download Excel Perawanan", 
+                    data=excel_data, 
+                    file_name=f"PERAWANAN_{dt_min.strftime('%Y%m')}_{dt_max.strftime('%Y%m')}.xlsx", 
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
 
 # --- HALAMAN PIBAL / RADIOSONDE ---
 elif menu == "Form Komponen Angin, UWI, dan UWII":
