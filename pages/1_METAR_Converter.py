@@ -352,9 +352,9 @@ def generate_excel_bytes_metar_speci(df_clean, report_type="METAR"):
     buffer.seek(0)
     return buffer
 
-# =======================================================================
-# ===== EXCEL TEMPLATE INSERTER (LOGO BMKG UTUH & BORDER PER BULAN) =====
-# =======================================================================
+# =========================================================================================
+# ===== EXCEL TEMPLATE INSERTER (DENGAN SUB-HEADER TANGGAL HARIAN & LOGO UTUH) ============
+# =========================================================================================
 def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3.xlsx"):
     if not os.path.exists(template_path):
         for alt in ["TEMPLATE METAR.xlsx", "TEMPLATE METAR_2.xlsx", "TEMPLATE METAR_3.xlsx"]:
@@ -380,10 +380,21 @@ def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3
         except:
             logo_bytes = None
 
+    # Pengaturan Font, Border, Alignment, dan Fill Warna
     thin_side = Side(style='thin', color='000000')
     thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
     align_center = Alignment(horizontal='center', vertical='center')
+    align_left = Alignment(horizontal='left', vertical='center')
+    
+    font_kop = Font(name='Arial', size=11, bold=True)
+    font_date_header = Font(name='Arial', size=10, bold=True, color='000000')
+    font_tbl_header = Font(name='Arial', size=9, bold=True)
     font_data = Font(name='Arial', size=9)
+    
+    date_fill = PatternFill(start_color='E2EFDA', end_color='E2EFDA', fill_type='solid') # Warna Soft Green untuk Tanggal
+    tbl_header_fill = PatternFill(start_color='D9D9D9', end_color='D9D9D9', fill_type='solid') # Warna Abu-abu Header
+
+    headers_table = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK']
 
     df_clean['year'] = df_clean['datetime'].dt.year
     df_clean['month'] = df_clean['datetime'].dt.month
@@ -399,7 +410,7 @@ def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3
         ws = wb.copy_worksheet(ws_template)
         ws.title = sheet_name
         
-        # 1. Pasang Ulang Logo BMKG di Sel A1
+        # 1. Re-insert Logo BMKG di Sel A1
         if logo_bytes:
             try:
                 logo_stream = io.BytesIO(logo_bytes)
@@ -410,46 +421,77 @@ def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3
             except:
                 pass
         
-        # 2. Update Header Cetak & Tanggal KOP (D4 & G4)
+        # 2. Update KOP Atas (D4 & G4)
         ws['D4'].value = "REKAP DATA METAR :"
-        ws['G4'].value = datetime(year, month, 1)
+        ws['G4'].value = f"{nama_bulan} {year}"
         
-        # Kunci Header Cetak di Bagian Atas Setiap Halaman Cetak ($6:$7)
-        ws.print_title_rows = '$6:$7'
-        
-        # 3. Penulisan Data METAR Bulan Berjalan
-        for _, row in month_group.iterrows():
-            d = row['day']
-            h = row['hour']
-            target_row = 8 + (d - 1) * 24 + h # Mulai dari Baris 8
-            
-            metar_type = str(row['TYPE']) if pd.notna(row['TYPE']) else 'METAR'
-            loc = str(row['LOC']) if pd.notna(row['LOC']) else 'WATU'
-            time_str = str(row['TIME']) if pd.notna(row['TIME']) else ''
-            wind = str(row['WIND']) if pd.notna(row['WIND']) else ''
-            vis = str(row['VIS']) if pd.notna(row['VIS']) else ''
-            wx = str(row['WX']) if pd.notna(row['WX']) else ''
-            cloud = str(row['CLOUD']) if pd.notna(row['CLOUD']) else ''
-            t_dp = str(row['T/DP']) if pd.notna(row['T/DP']) else ''
-            qnh = str(row['QNH']) if pd.notna(row['QNH']) else ''
-            rmk = str(row['RMK']) if pd.notna(row['RMK']) else ''
-            
-            if vis == 'CAVOK':
-                wx = ''
-                cloud = ''
-                
-            vals = [metar_type, loc, time_str, wind, int(vis) if vis.isdigit() else vis, wx, cloud, t_dp, qnh, rmk]
-            for col_idx, val in enumerate(vals, start=1):
-                ws.cell(row=target_row, column=col_idx, value=val)
-
-        # 4. Aplikasi Border dan Alignment Konsisten untuk Seluruh Sel dari Baris 8 ke Bawah
-        max_row_sheet = ws.max_row
-        for r in range(8, max_row_sheet + 1):
+        # Kosongkan area lama mulai baris 6 ke bawah
+        max_r_tmp = ws.max_row
+        for r in range(6, max_r_tmp + 5):
             for c in range(1, 11):
-                cell = ws.cell(row=r, column=c)
-                cell.border = thin_border
-                cell.alignment = align_center
-                cell.font = font_data
+                ws.cell(row=r, column=c).value = None
+                ws.cell(row=r, column=c).border = Border()
+                ws.cell(row=r, column=c).fill = PatternFill(fill_type=None)
+
+        current_row = 6
+        num_days = calendar.monthrange(year, month)[1]
+        
+        # 3. Buat Layout Harian Berulang (Sub-Header Tanggal + Header Tabel + Data 24 Jam)
+        for d in range(1, num_days + 1):
+            day_data = month_group[month_group['day'] == d].sort_values('hour')
+            
+            # --- A. SUB-HEADER TANGGAL ---
+            ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=10)
+            cell_date = ws.cell(row=current_row, column=1, value=f" TANGGAL: {d:02d} {nama_bulan} {year}")
+            cell_date.font = font_date_header
+            cell_date.fill = date_fill
+            cell_date.alignment = align_left
+            for c in range(1, 11):
+                ws.cell(row=current_row, column=c).border = thin_border
+            current_row += 1
+            
+            # --- B. HEADER TABEL METAR ---
+            for c_idx, h_text in enumerate(headers_table, start=1):
+                cell_h = ws.cell(row=current_row, column=c_idx, value=h_text)
+                cell_h.font = font_tbl_header
+                cell_h.fill = tbl_header_fill
+                cell_h.alignment = align_center
+                cell_h.border = thin_border
+            current_row += 1
+            
+            # --- C. DATA 24 JAM (00:00 - 23:00 UTC) ---
+            day_map = {r['hour']: r for _, r in day_data.iterrows()}
+            for h in range(24):
+                if h in day_map:
+                    row = day_map[h]
+                    metar_type = str(row['TYPE']) if pd.notna(row['TYPE']) else 'METAR'
+                    loc = str(row['LOC']) if pd.notna(row['LOC']) else 'WATU'
+                    time_str = str(row['TIME']) if pd.notna(row['TIME']) else f"{d:02d}{h:02d}00Z"
+                    wind = str(row['WIND']) if pd.notna(row['WIND']) else ''
+                    vis = str(row['VIS']) if pd.notna(row['VIS']) else ''
+                    wx = str(row['WX']) if pd.notna(row['WX']) else ''
+                    cloud = str(row['CLOUD']) if pd.notna(row['CLOUD']) else ''
+                    t_dp = str(row['T/DP']) if pd.notna(row['T/DP']) else ''
+                    qnh = str(row['QNH']) if pd.notna(row['QNH']) else ''
+                    rmk = str(row['RMK']) if pd.notna(row['RMK']) else ''
+                    
+                    if vis == 'CAVOK':
+                        wx = ''
+                        cloud = ''
+                    vals = [metar_type, loc, time_str, wind, int(vis) if vis.isdigit() else vis, wx, cloud, t_dp, qnh, rmk]
+                else:
+                    # Baris Kosong Ber-border jika Jam Tersebut Tidak Ada Pengamatan
+                    vals = ['METAR', 'WATU', f"{d:02d}{h:02d}00Z", 'NIL', 'NIL', 'NIL', 'NIL', 'NIL', 'NIL', 'NOSIG']
+
+                for col_idx, val in enumerate(vals, start=1):
+                    cell = ws.cell(row=current_row, column=col_idx, value=val)
+                    cell.font = font_data
+                    cell.alignment = align_center
+                    cell.border = thin_border
+                current_row += 1
+                
+            # Spasi 1 baris antar tanggal
+            current_row += 1
             
     wb.remove(ws_template)
     
