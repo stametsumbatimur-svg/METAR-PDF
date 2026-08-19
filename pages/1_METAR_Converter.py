@@ -641,66 +641,65 @@ def generate_pdf_bytes_thunderstorm(df_clean, station_name, kepala_nama, kepala_
 
 def generate_excel_from_template_thunderstorm(df_clean, template_path="TEMPLATE THUNDERSTORM.xlsx"):
     """
-    Mengisi data Thunderstorm secara langsung ke dalam TEMPLATE THUNDERSTORM.xlsx
+    Mengisi matriks kejadian Thunderstorm ke TEMPLATE THUNDERSTORM.xlsx murni tanpa mengubah KOP/TTD.
     """
-    if not os.path.exists(template_path):
-        # Jika file tidak terdeteksi, berikan fallback ke fungsi pembuat excel biasa
-        return generate_excel_bytes_thunderstorm(df_clean, "STASIUN METEOROLOGI UMBU MEHANG KUNDA")
-
     buffer = io.BytesIO()
-    wb = openpyxl.load_workbook(template_path)
     
-    # Ambil sheet pertama / aktif
-    if "Sheet1" in wb.sheetnames:
-        ws = wb["Sheet1"]
+    if os.path.exists(template_path):
+        wb = openpyxl.load_workbook(template_path)
+        ws = wb["Sheet1"] if "Sheet1" in wb.sheetnames else wb.active
     else:
+        # Fallback jika file template fisik tidak ditemukan di folder utama
+        wb = openpyxl.Workbook()
         ws = wb.active
+        ws.title = "Sheet1"
+        ws.cell(row=1, column=1, value="DATA THUNDERSTORM")
+        ws.cell(row=2, column=1, value="STASIUN METEOROLOGI UMBU MEHANG KUNDA")
+        ws.cell(row=4, column=1, value="TANGGAL")
+        for d in range(1, 32):
+            ws.cell(row=4, column=d+1, value=d)
+        ws.cell(row=5, column=1, value="BULAN")
+        for m in range(1, 13):
+            ws.cell(row=5+m, column=1, value=BULAN_INDO[m])
 
     thin_side = Side(style='thin', color='000000')
     thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
     align_center = Alignment(horizontal='center', vertical='center')
     font_data = Font(name='Arial', size=10)
 
-    # 1. Ekstrak Tahun dari Data
+    # 1. Update Tahun saja di Cell A3
     tahun = df_clean['datetime'].dt.year.iloc[0]
-    
-    # 2. Update Header Tahun di Cell A3 (Baris 3, Kolom 1)
     ws.cell(row=3, column=1, value=f"TAHUN : {tahun}")
 
-    # 3. Matriks Penyimpanan Data Thunderstorm (12 Bulan, 31 Hari)
-    # Default: "" (Kosong / Tanpa Pengamatan)
+    # 2. Pemetaan Matriks (12 Bulan x 31 Hari)
     matrix = {m: {d: "" for d in range(1, 32)} for m in range(1, 13)}
 
     df_clean['day'] = df_clean['datetime'].dt.day
     df_clean['month'] = df_clean['datetime'].dt.month
     df_clean['is_ts'] = df_clean.apply(lambda r: check_is_thunderstorm(r['WX'], r['CLOUD']), axis=1)
 
-    # Isi 'O' untuk tanggal yang memiliki pengamatan
+    # Tanggal dengan pengamatan -> 'O'
     observed_dates = df_clean[['month', 'day']].drop_duplicates()
     for _, r in observed_dates.iterrows():
         matrix[r['month']][r['day']] = "O"
 
-    # Isi 'X' untuk tanggal yang terdeteksi Thunderstorm / CB
+    # Tanggal terdeteksi Thunderstorm / CB -> 'X'
     ts_dates = df_clean[df_clean['is_ts'] == True][['month', 'day']].drop_duplicates()
     for _, r in ts_dates.iterrows():
         matrix[r['month']][r['day']] = "X"
 
-    # 4. Pengisian Matriks ke Sel Excel (B6 sampai AV17 / Baris 6 s.d 17, Kolom 2 s.d 32)
-    # Baris 6 = JANUARI, Baris 17 = DESEMBER
+    # 3. Pengisian Data Matriks ke Sel B6:AF17
     for m in range(1, 13):
         target_row = 5 + m  # Januari (m=1) -> Row 6
         for d in range(1, 32):
             target_col = 1 + d  # Tanggal 1 (d=1) -> Kolom B (2)
-            
             val = matrix[m][d]
-            cell = ws.cell(row=target_row, column=target_col, value=val)
             
-            # Terapkan Format
+            cell = ws.cell(row=target_row, column=target_col, value=val)
             cell.font = font_data
             cell.alignment = align_center
             cell.border = thin_border
 
-    # Save ke buffer
     wb.save(buffer)
     buffer.seek(0)
     return buffer
@@ -1612,47 +1611,11 @@ elif menu == "WXREV Converter":
 # --- HALAMAN THUNDERSTORM EXPORTER ---
 elif menu == "Thunderstorm Exporter":
     st.title("⚡ Thunderstorm Data Exporter")
-    st.write("Ekstraksi data kejadian Kilat / Thunderstorm tahunan dari gabungan file METAR & SPECI.")
-    with st.expander("⚙️ Pengaturan Header & Tanda Tangan PDF"):
-        st_nama = st.text_input("Nama Stasiun", "STASIUN METEOROLOGI UMBU MEHANG KUNDA")
-        kp_nama = st.text_input("Nama Kepala Stasiun", "CARLES ALEXANDER TARI, S.TP")
-        kp_nip = st.text_input("NIP Kepala Stasiun (Opsional)", "")
-    uploaded_files = st.file_uploader("Upload File CSV (Bisa Upload Multiple METAR/SPECI)", type=["csv"], accept_multiple_files=True)
-    if uploaded_files:
-        all_rows = []
-        for file in uploaded_files:
-            try:
-                df = pd.read_csv(file)
-                if 'sandi' in df.columns and 'data_timestamp' in df.columns:
-                    for idx, row in df.iterrows():
-                        res = parse_metar_speci(row['sandi'])
-                        if res:
-                            station = row['station_name'] if 'station_name' in df.columns else st_nama
-                            all_rows.append(res + [row['data_timestamp'], station])
-            except Exception as e: st.error(f"Gagal membaca file {file.name}: {e}")
-        if all_rows:
-            columns = ['TYPE', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK', 'is_cor', 'cc_type', 'raw_timestamp', 'station_name']
-            df_clean = pd.DataFrame(all_rows, columns=columns)
-            df_clean['raw_timestamp'] = df_clean['raw_timestamp'].str.replace(" +0000 UTC", "", regex=False)
-            df_clean['datetime'] = pd.to_datetime(df_clean['raw_timestamp'])
-            df_clean = df_clean.sort_values(by='datetime').reset_index(drop=True)
-            pdf_data = generate_pdf_bytes_thunderstorm(df_clean, st_nama, kp_nama, kp_nip)
-            excel_data = generate_excel_bytes_thunderstorm(df_clean, st_nama)
-            tahun = df_clean['datetime'].dt.year.iloc[0]
-            st.success(f"Berhasil memproses data Thunderstorm Tahun {tahun}!")
-            st.write("---")
-            col_pdf, col_xlsx = st.columns(2)
-            with col_pdf: st.download_button(label="📥 Download PDF Thunderstorm", data=pdf_data, file_name=f"THUNDERSTORM_{tahun}.pdf", mime="application/pdf")
-            with col_xlsx: st.download_button(label="📊 Download Excel Thunderstorm", data=excel_data, file_name=f"THUNDERSTORM_{tahun}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-# --- HALAMAN THUNDERSTORM EXPORTER ---
-elif menu == "Thunderstorm Exporter":
-    st.title("⚡ Thunderstorm Data Exporter")
-    st.write("Ekstraksi data kejadian Kilat / Thunderstorm tahunan dari gabungan file METAR & SPECI menggunakan Template Excel.")
+    st.write("Ekstraksi data kejadian Kilat / Thunderstorm tahunan dari gabungan file METAR & SPECI ke dalam Template Excel.")
     
     DEFAULT_TEMPLATE_TS = "TEMPLATE THUNDERSTORM.xlsx"
     
-    with st.expander("⚙️ Pengaturan Header & Tanda Tangan PDF"):
+    with st.expander("⚙️ Pengaturan Header & Tanda Tangan (Khusus Ekspor PDF)"):
         st_nama = st.text_input("Nama Stasiun", "STASIUN METEOROLOGI UMBU MEHANG KUNDA")
         kp_nama = st.text_input("Nama Kepala Stasiun", "CARLES ALEXANDER TARI, S.TP")
         kp_nip = st.text_input("NIP Kepala Stasiun (Opsional)", "")
@@ -1683,12 +1646,8 @@ elif menu == "Thunderstorm Exporter":
             # PDF Generator
             pdf_data = generate_pdf_bytes_thunderstorm(df_clean, st_nama, kp_nama, kp_nip)
             
-            # Excel Generator menggunakan Template
-            if os.path.exists(DEFAULT_TEMPLATE_TS):
-                excel_data = generate_excel_from_template_thunderstorm(df_clean, template_path=DEFAULT_TEMPLATE_TS)
-            else:
-                st.warning(f"⚠️ File template '{DEFAULT_TEMPLATE_TS}' tidak terdeteksi. Menggunakan format Excel fallback.")
-                excel_data = generate_excel_bytes_thunderstorm(df_clean, st_nama)
+            # Excel Generator dari Template (Tanpa Otomatisasi TTD/Nama)
+            excel_data = generate_excel_from_template_thunderstorm(df_clean, template_path=DEFAULT_TEMPLATE_TS)
                 
             tahun = df_clean['datetime'].dt.year.iloc[0]
             st.success(f"Berhasil memproses data Thunderstorm Tahun {tahun}!")
