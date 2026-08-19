@@ -353,9 +353,9 @@ def generate_excel_bytes_metar_speci(df_clean, report_type="METAR"):
     buffer.seek(0)
     return buffer
 
-# =========================================================================================
-# ===== EXCEL TEMPLATE INSERTER (KOP UTUH PRESISI + ROW BREAKS PRESISI PER HARI) ==========
-# =========================================================================================
+# =================================================================================================
+# ===== EXCEL TEMPLATE INSERTER (BLOK KOP + LOGO + HEADER UTUH DI SETIAP HARI / CETAKAN Halaman) ===
+# =================================================================================================
 def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3.xlsx"):
     if not os.path.exists(template_path):
         for alt in ["TEMPLATE METAR.xlsx", "TEMPLATE METAR_2.xlsx", "TEMPLATE METAR_3.xlsx"]:
@@ -373,7 +373,7 @@ def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3
     else:
         ws_template = wb.active
 
-    # Ekstraksi Logo BMKG
+    # Ekstraksi Logo BMKG dari Template
     logo_bytes = None
     if hasattr(ws_template, '_images') and len(ws_template._images) > 0:
         try:
@@ -384,7 +384,14 @@ def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3
     thin_side = Side(style='thin', color='000000')
     thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
     align_center = Alignment(horizontal='center', vertical='center')
+    align_right = Alignment(horizontal='right', vertical='center')
+    
+    font_kop_bold = Font(name='Arial', size=11, bold=True)
+    font_tbl_header = Font(name='Arial', size=9, bold=True)
     font_data = Font(name='Arial', size=9)
+    
+    tbl_header_fill = PatternFill(start_color='D9D9D9', end_color='D9D9D9', fill_type='solid')
+    headers_table = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK']
 
     df_clean['year'] = df_clean['datetime'].dt.year
     df_clean['month'] = df_clean['datetime'].dt.month
@@ -397,76 +404,109 @@ def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3
         nama_bulan = BULAN_INDO[month]
         sheet_name = f"{nama_bulan}"
         
-        ws = wb.copy_worksheet(ws_template)
-        ws.title = sheet_name
+        # Buat sheet baru
+        ws = wb.create_sheet(title=sheet_name)
         
-        # 1. Re-insert Logo BMKG di Sel A1
-        if logo_bytes:
-            try:
-                logo_stream = io.BytesIO(logo_bytes)
-                logo_img = OpenpyxlImage(logo_stream)
-                logo_img.width = 48
-                logo_img.height = 48
-                ws.add_image(logo_img, 'A1')
-            except:
-                pass
-        
-        # 2. Update KOP Atas Bawaan Template (Baris 1-7 Terjaga Utuh Presisi)
-        ws['D4'].value = "REKAP DATA METAR :"
-        ws['G4'].value = f"{nama_bulan} {year}"
-        
-        # Kunci Header Cetak ($6:$7) di Bagian Atas Setiap Halaman Cetak
-        ws.print_title_rows = '$6:$7'
+        # Atur Lebar Kolom Presisi Sesuai Template
+        col_widths = [10.5, 8.5, 9.5, 9.8, 9.0, 7.1, 14.8, 10.0, 9.2, 12.0]
+        for c_i, w_val in enumerate(col_widths, start=1):
+            ws.column_dimensions[get_column_letter(c_i)].width = w_val
+
+        # Atur Margin Kertas A4 Portrait
+        ws.page_setup.paperSize = ws.PAPERSIZE_A4
+        ws.page_setup.orientation = ws.ORIENTATION_PORTRAIT
         
         num_days = calendar.monthrange(year, month)[1]
-        
-        # 3. Penulisan Data Runtut Mulai Baris 8
-        for _, row in month_group.iterrows():
-            d = row['day']
-            h = row['hour']
-            target_row = 8 + (d - 1) * 24 + h # Dimulai dari Baris 8
-            
-            metar_type = str(row['TYPE']) if pd.notna(row['TYPE']) else 'METAR'
-            loc = str(row['LOC']) if pd.notna(row['LOC']) else 'WATU'
-            time_str = str(row['TIME']) if pd.notna(row['TIME']) else f"{d:02d}{h:02d}00Z"
-            wind = str(row['WIND']) if pd.notna(row['WIND']) else ''
-            vis = str(row['VIS']) if pd.notna(row['VIS']) else ''
-            wx = str(row['WX']) if pd.notna(row['WX']) else ''
-            cloud = str(row['CLOUD']) if pd.notna(row['CLOUD']) else ''
-            t_dp = str(row['T/DP']) if pd.notna(row['T/DP']) else ''
-            qnh = str(row['QNH']) if pd.notna(row['QNH']) else ''
-            rmk = str(row['RMK']) if pd.notna(row['RMK']) else ''
-            
-            if vis == 'CAVOK':
-                wx = ''
-                cloud = ''
-                
-            vals = [metar_type, loc, time_str, wind, int(vis) if vis.isdigit() else vis, wx, cloud, t_dp, qnh, rmk]
-            for col_idx, val in enumerate(vals, start=1):
-                cell = ws.cell(row=target_row, column=col_idx, value=val)
-                cell.font = font_data
-                cell.alignment = align_center
-                cell.border = thin_border
+        ws.row_breaks.brk = []
 
-        # 4. Aplikasi Border pada Seluruh Sel Kosong
-        max_row_sheet = 8 + (num_days * 24) - 1
-        for r in range(8, max_row_sheet + 1):
-            for c in range(1, 11):
-                cell = ws.cell(row=r, column=c)
-                if not cell.value:
-                    # Baris Kosong Default
-                    d_idx = ((r - 8) // 24) + 1
-                    h_idx = (r - 8) % 24
-                    cell.value = 'METAR' if c == 1 else ('WATU' if c == 2 else (f"{d_idx:02d}{h_idx:02d}00Z" if c == 3 else ('NIL' if c in [4,5,6,7] else ('NOSIG' if c == 10 else ''))))
-                cell.font = font_data
-                cell.alignment = align_center
-                cell.border = thin_border
+        # MEMBUAT BLOK HARIAN LENGKAP (KOP + LOGO + TANGGAL + TABEL 24 JAM) UNTUK SETIAP HARI
+        for d in range(1, num_days + 1):
+            start_row = 1 + (d - 1) * 31  # Hari 1: Row 1, Hari 2: Row 32, Hari 3: Row 63, dst.
+            
+            # --- 1. KOP SURAT (Baris start_row s.d. start_row + 2) ---
+            ws.merge_cells(start_row=start_row, start_column=1, end_row=start_row, end_column=10)
+            c1 = ws.cell(row=start_row, column=1, value="BALAI BESAR METEOROLOGI KLIMATOLOGI DAN GEOFISIKA WILAYAH III")
+            c1.font = font_kop_bold
+            c1.alignment = align_center
 
-        # 5. Pasang Row Page Breaks Otomatis Presisi Setelah Hari Berakhir (Baris 31, 55, 79, ...)
-        ws.row_breaks.brk = []  # Reset list row breaks bawaan secara aman
-        for d in range(1, num_days):
-            break_row = 8 + (d * 24) - 1 # Tepat setelah jam 23:00Z tanggal tersebut
-            ws.row_breaks.append(Break(id=break_row))
+            ws.merge_cells(start_row=start_row+1, start_column=1, end_row=start_row+1, end_column=10)
+            c2 = ws.cell(row=start_row+1, column=1, value="STASIUN METEOROLOGI UMBU MEHANG KUNDA")
+            c2.font = font_kop_bold
+            c2.alignment = align_center
+
+            ws.merge_cells(start_row=start_row+2, start_column=1, end_row=start_row+2, end_column=10)
+            c3 = ws.cell(row=start_row+2, column=1, value="JL. ADI SUCIPTO NO.3")
+            c3.font = font_kop_bold
+            c3.alignment = align_center
+
+            # --- 2. LOGO BMKG DI SEL A1 PADA SETIAP HARI ---
+            if logo_bytes:
+                try:
+                    logo_stream = io.BytesIO(logo_bytes)
+                    logo_img = OpenpyxlImage(logo_stream)
+                    logo_img.width = 48
+                    logo_img.height = 48
+                    ws.add_image(logo_img, f'A{start_row}')
+                except:
+                    pass
+
+            # --- 3. JUDUL TANGGAL HARIAN (Baris start_row + 3) ---
+            ws.merge_cells(start_row=start_row+3, start_column=4, end_row=start_row+3, end_column=6)
+            c_label = ws.cell(row=start_row+3, column=4, value="REKAP DATA METAR :")
+            c_label.font = font_kop_bold
+            c_label.alignment = align_right
+
+            ws.merge_cells(start_row=start_row+3, start_column=7, end_row=start_row+3, end_column=8)
+            c_date = ws.cell(row=start_row+3, column=7, value=f"{d:02d} {nama_bulan} {year}")
+            c_date.font = font_kop_bold
+            c_date.alignment = align_left
+
+            # --- 4. HEADER TABEL METAR (Baris start_row + 5 s.d. start_row + 6) ---
+            for c_i, h_text in enumerate(headers_table, start=1):
+                ws.merge_cells(start_row=start_row+5, start_column=c_i, end_row=start_row+6, end_column=c_i)
+                cell_h = ws.cell(row=start_row+5, column=c_i, value=h_text)
+                cell_h.font = font_tbl_header
+                cell_h.fill = tbl_header_fill
+                cell_h.alignment = align_center
+                for r_sub in range(start_row+5, start_row+7):
+                    ws.cell(row=r_sub, column=c_i).border = thin_border
+
+            # --- 5. DATA 24 JAM (Baris start_row + 7 s.d. start_row + 30) ---
+            day_data = month_group[month_group['day'] == d]
+            day_map = {r['hour']: r for _, r in day_data.iterrows()}
+
+            for h in range(24):
+                data_row_idx = start_row + 7 + h
+                if h in day_map:
+                    row = day_map[h]
+                    metar_type = str(row['TYPE']) if pd.notna(row['TYPE']) else 'METAR'
+                    loc = str(row['LOC']) if pd.notna(row['LOC']) else 'WATU'
+                    time_str = str(row['TIME']) if pd.notna(row['TIME']) else f"{d:02d}{h:02d}00Z"
+                    wind = str(row['WIND']) if pd.notna(row['WIND']) else ''
+                    vis = str(row['VIS']) if pd.notna(row['VIS']) else ''
+                    wx = str(row['WX']) if pd.notna(row['WX']) else ''
+                    cloud = str(row['CLOUD']) if pd.notna(row['CLOUD']) else ''
+                    t_dp = str(row['T/DP']) if pd.notna(row['T/DP']) else ''
+                    qnh = str(row['QNH']) if pd.notna(row['QNH']) else ''
+                    rmk = str(row['RMK']) if pd.notna(row['RMK']) else ''
+
+                    if vis == 'CAVOK':
+                        wx = ''
+                        cloud = ''
+                    vals = [metar_type, loc, time_str, wind, int(vis) if vis.isdigit() else vis, wx, cloud, t_dp, qnh, rmk]
+                else:
+                    vals = ['METAR', 'WATU', f"{d:02d}{h:02d}00Z", 'NIL', 'NIL', 'NIL', 'NIL', 'NIL', 'NIL', 'NOSIG']
+
+                for col_idx, val in enumerate(vals, start=1):
+                    cell = ws.cell(row=data_row_idx, column=col_idx, value=val)
+                    cell.font = font_data
+                    cell.alignment = align_center
+                    cell.border = thin_border
+
+            # --- 6. PAGE BREAK PERSIS PADA AKHIR BACAAN HARI INI (BARIS AKHIR BLOK HARI) ---
+            if d < num_days:
+                break_row = start_row + 30 # Baris ke-31 setiap blok harian
+                ws.row_breaks.append(Break(id=break_row))
 
     wb.remove(ws_template)
     
