@@ -253,7 +253,7 @@ def generate_excel_from_template_daily(df_clean, report_type="METAR", template_p
             if os.path.exists(logo_path):
                 try:
                     img = OpenpyxlImage(logo_path)
-                    img.width = 45; img.height = 45
+                    img.width = 90; img.height = 90
                     ws.add_image(img, f'A{start_row}')
                 except:
                     pass
