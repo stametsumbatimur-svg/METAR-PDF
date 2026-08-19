@@ -14,6 +14,7 @@ from reportlab.lib import colors
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.cell.cell import MergedCell
+from openpyxl.drawing.image import Image as OpenpyxlImage
 
 # ==========================================
 # ===== KONFIGURASI HALAMAN UTAMA ==========
@@ -139,7 +140,6 @@ def generate_pdf_bytes_metar(df_clean, logo_path):
     styles = getSampleStyleSheet()
     header_text_style = ParagraphStyle('HeaderCenterText', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=11, leading=15, alignment=1)
     
-    # Style sel tabel dengan Auto-Wrap untuk mencegah teks bertumpuk
     cell_style_center = ParagraphStyle('CellCenter', parent=styles['Normal'], fontName='Helvetica', fontSize=7.5, leading=9, alignment=1)
     cell_style_bold = ParagraphStyle('CellHeaderCenter', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=8, leading=10, alignment=1)
 
@@ -205,12 +205,11 @@ def generate_pdf_bytes_metar(df_clean, logo_path):
             else:
                 p_vis = Paragraph(str(row['VIS']), cell_style_center)
                 p_wx = Paragraph(str(row['WX']), cell_style_center)
-                p_cloud = Paragraph(str(row['CLOUD']), cell_style_center) # Membungkus teks awan dalam Paragraph
+                p_cloud = Paragraph(str(row['CLOUD']), cell_style_center)
                 row_data = [p_type, p_loc, p_time, p_wind, p_vis, p_wx, p_cloud, p_tdp, p_qnh, p_rmk]
                 
             table_data.append(row_data)
             
-        # Lebar Kolom Disesuaikan Agar Proporsional
         col_widths = [38, 32, 45, 55, 30, 32, 120, 42, 42, 44] 
         metar_table = Table(table_data, colWidths=col_widths)
         metar_table.setStyle(TableStyle(base_table_style))
@@ -353,9 +352,9 @@ def generate_excel_bytes_metar_speci(df_clean, report_type="METAR"):
     buffer.seek(0)
     return buffer
 
-# ========================================================
-# ===== EXCEL TEMPLATE INSERTER (DENGAN BORDER UTUH) ====
-# ========================================================
+# =======================================================================
+# ===== EXCEL TEMPLATE INSERTER (LOGO BMKG UTUH & BORDER PER BULAN) =====
+# =======================================================================
 def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3.xlsx"):
     if not os.path.exists(template_path):
         for alt in ["TEMPLATE METAR.xlsx", "TEMPLATE METAR_2.xlsx", "TEMPLATE METAR_3.xlsx"]:
@@ -373,7 +372,14 @@ def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3
     else:
         ws_template = wb.active
 
-    # Opsi Style Border dan Alignment Otomatis untuk Seluruh Sel
+    # Ekstraksi Gambar Logo BMKG dari Sheet Template
+    logo_bytes = None
+    if hasattr(ws_template, '_images') and len(ws_template._images) > 0:
+        try:
+            logo_bytes = ws_template._images[0]._data()
+        except:
+            logo_bytes = None
+
     thin_side = Side(style='thin', color='000000')
     thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
     align_center = Alignment(horizontal='center', vertical='center')
@@ -393,14 +399,29 @@ def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3
         ws = wb.copy_worksheet(ws_template)
         ws.title = sheet_name
         
-        first_date_dt = datetime(year, month, 1)
-        ws['G4'].value = first_date_dt
+        # 1. Pasang Ulang Logo BMKG di Sel A1
+        if logo_bytes:
+            try:
+                logo_stream = io.BytesIO(logo_bytes)
+                logo_img = OpenpyxlImage(logo_stream)
+                logo_img.width = 48
+                logo_img.height = 48
+                ws.add_image(logo_img, 'A1')
+            except:
+                pass
         
-        # Penulisan Data METAR
+        # 2. Update Header Cetak & Tanggal KOP (D4 & G4)
+        ws['D4'].value = "REKAP DATA METAR :"
+        ws['G4'].value = datetime(year, month, 1)
+        
+        # Kunci Header Cetak di Bagian Atas Setiap Halaman Cetak ($6:$7)
+        ws.print_title_rows = '$6:$7'
+        
+        # 3. Penulisan Data METAR Bulan Berjalan
         for _, row in month_group.iterrows():
             d = row['day']
             h = row['hour']
-            target_row = 8 + (d - 1) * 24 + h # Dimulai dari baris 8
+            target_row = 8 + (d - 1) * 24 + h # Mulai dari Baris 8
             
             metar_type = str(row['TYPE']) if pd.notna(row['TYPE']) else 'METAR'
             loc = str(row['LOC']) if pd.notna(row['LOC']) else 'WATU'
@@ -419,9 +440,9 @@ def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3
                 
             vals = [metar_type, loc, time_str, wind, int(vis) if vis.isdigit() else vis, wx, cloud, t_dp, qnh, rmk]
             for col_idx, val in enumerate(vals, start=1):
-                cell = ws.cell(row=target_row, column=col_idx, value=val)
+                ws.cell(row=target_row, column=col_idx, value=val)
 
-        # Aplikasi Border dan Alignment Konsisten untuk Seluruh Sel dari Baris 8 ke Bawah
+        # 4. Aplikasi Border dan Alignment Konsisten untuk Seluruh Sel dari Baris 8 ke Bawah
         max_row_sheet = ws.max_row
         for r in range(8, max_row_sheet + 1):
             for c in range(1, 11):
@@ -1227,7 +1248,7 @@ def process_form_ab(wb, df_hellman, df_penguapan, nama_bulan, sample_year, num_d
             'hellman_15_16': 10, 'hellman_16_17': 11, 'hellman_17_18': 12, 'hellman_18_19': 13,
             'hellman_19_20': 14, 'hellman_20_21': 15, 'hellman_21_22': 16, 'hellman_22_23': 17,
             'hellman_23_24': 18, 'hellman_24_01': 19, 'hellman_01_02': 20, 'hellman_02_03': 21,
-            'hellman_03_04': 22, 'hellman_04_05': 23, 'hellman_05_06': 24, 'hellman_06_07': 25
+            'hellman_03_04': 32, 'hellman_04_05': 33, 'hellman_05_06': 34, 'hellman_06_07': 35
         }
         
         for r in range(12, 43):
@@ -1348,7 +1369,6 @@ def process_template_penguapan(wb, df_penguapan_full, target_year, target_month,
 def process_template_lpm(wb, df_lpm_month, year, month, num_days, nama_bulan, kepala_nama, kepala_nip):
     ws = wb['LPM'] if 'LPM' in wb.sheetnames else wb.active
     
-    # 1. Update Metadata (Bulan & Tahun ke D5 & D6)
     safe_set_cell(ws, 5, 4, f": {nama_bulan}") # Cell D5
     safe_set_cell(ws, 6, 4, f": {year}")       # Cell D6
     
@@ -1358,7 +1378,6 @@ def process_template_lpm(wb, df_lpm_month, year, month, num_days, nama_bulan, ke
         'ss_14-15': 11,'ss_15_16': 12,'ss_16_17': 13,'ss_17_18': 14
     }
     
-    # Pre-populate 1 s.d. 31 dengan "-"
     month_data = {}
     if df_lpm_month is not None and not df_lpm_month.empty:
         for _, r in df_lpm_month.iterrows():
@@ -1366,19 +1385,16 @@ def process_template_lpm(wb, df_lpm_month, year, month, num_days, nama_bulan, ke
             
     last_observer = ""
 
-    # Loop Baris 14 s.d 44 (Tanggal 1 s.d 31)
     for d in range(1, 32):
-        r = 13 + d # Baris 14 untuk d=1
+        r = 13 + d
         
-        # Jika tanggal melebihi jumlah hari dalam bulan berjalan
         if d > num_days:
-            for col_idx in range(3, 19): # Kolom C s.d R
+            for col_idx in range(3, 19):
                 safe_set_cell(ws, r, col_idx, "-")
         else:
             if d in month_data:
                 row_data = month_data[d]
                 
-                # Isi Jam 6-7 s.d 17-18 (Kolom C s.d N)
                 for col_name, col_idx in col_mapping.items():
                     val = row_data.get(col_name)
                     if pd.notna(val):
@@ -1389,7 +1405,6 @@ def process_template_lpm(wb, df_lpm_month, year, month, num_days, nama_bulan, ke
                     else:
                         safe_set_cell(ws, r, col_idx, "-")
                 
-                # Isi ss_total_8 (Kolom O) & ss_total_12 (Kolom Q)
                 tot8 = row_data.get('ss_total_8')
                 tot12 = row_data.get('ss_total_12')
                 safe_set_cell(ws, r, 15, float(tot8) if pd.notna(tot8) else "-")
@@ -1398,11 +1413,10 @@ def process_template_lpm(wb, df_lpm_month, year, month, num_days, nama_bulan, ke
                 if pd.notna(row_data.get('observer_name')):
                     last_observer = str(row_data['observer_name'])
             else:
-                # Tanggal valid tapi tidak ada di CSV
                 for col_idx in range(3, 19):
                     safe_set_cell(ws, r, col_idx, "-")
                     
-    # Update Blok Pengesahan / Tanda Tangan
+    tgl_sekarang = datetime.now()
     tgl_ttd = f"WAINGAPU, {num_days} {nama_bulan} {year}"
     safe_set_cell(ws, 48, 13, tgl_ttd) # Cell M48
     safe_set_cell(ws, 55, 2, kepala_nama) # Cell B55
@@ -1483,7 +1497,6 @@ if menu == "METAR Converter":
                             st.success(f"Berhasil memproses data METAR!")
                             pdf_data = generate_pdf_bytes_metar(df_clean, LOGO_FILE)
                             
-                            # Cek Ketersediaan Template
                             DEFAULT_TEMPLATE_METAR = "TEMPLATE METAR_3.xlsx"
                             if os.path.exists(DEFAULT_TEMPLATE_METAR) or os.path.exists("TEMPLATE METAR_2.xlsx") or os.path.exists("TEMPLATE METAR.xlsx"):
                                 excel_data = generate_excel_from_template_metar(df_clean, template_path=DEFAULT_TEMPLATE_METAR)
