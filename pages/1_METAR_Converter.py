@@ -354,7 +354,7 @@ def generate_excel_bytes_metar_speci(df_clean, report_type="METAR"):
     return buffer
 
 # =================================================================================================
-# ===== EXCEL TEMPLATE INSERTER (BLOK KOP + LOGO + HEADER UTUH DI SETIAP HARI / CETAKAN Halaman) ===
+# ===== EXCEL TEMPLATE INSERTER (BLOK KOP + LOGO + HEADER UTUH DI SETIAP HARI + MARGIN JILID) =====
 # =================================================================================================
 def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3.xlsx"):
     if not os.path.exists(template_path):
@@ -385,7 +385,7 @@ def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3
     thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
     align_center = Alignment(horizontal='center', vertical='center')
     align_right = Alignment(horizontal='right', vertical='center')
-    align_left = Alignment(horizontal='left', vertical='center') # <-- PERBAIKAN: DIDEKLARASIKAN DI SINI
+    align_left = Alignment(horizontal='left', vertical='center')
     
     font_kop_bold = Font(name='Arial', size=11, bold=True)
     font_tbl_header = Font(name='Arial', size=9, bold=True)
@@ -413,9 +413,18 @@ def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3
         for c_i, w_val in enumerate(col_widths, start=1):
             ws.column_dimensions[get_column_letter(c_i)].width = w_val
 
-        # Atur Margin Kertas A4 Portrait
+        # --- PENGATURAN KERTAS & MARGIN UNTUK JILID ---
+        ws.sheet_properties.pageSetUpPr.fitToPage = True
         ws.page_setup.paperSize = ws.PAPERSIZE_A4
         ws.page_setup.orientation = ws.ORIENTATION_PORTRAIT
+        ws.page_setup.fitToWidth = 1
+        ws.page_setup.fitToHeight = False
+        
+        ws.page_margins.left = 1.2   # Margin kiri lebih lebar untuk area jilid (~3 cm)
+        ws.page_margins.right = 0.2  # Margin kanan sempit agar tabel muat digeser
+        ws.page_margins.top = 0.75
+        ws.page_margins.bottom = 0.75
+        ws.print_options.horizontalCentered = False # Matikan fitur auto-center horizontal
         
         num_days = calendar.monthrange(year, month)[1]
         
