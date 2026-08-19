@@ -246,11 +246,10 @@ def generate_excel_from_template_daily(df_clean, report_type="METAR", template_p
             c3 = ws.cell(row=start_row+2, column=1, value="JL. ADI SUCIPTO NO.3")
             c3.font = font_kop_bold; c3.alignment = align_center; ws.row_dimensions[start_row+2].height = 18
 
-            # Logo BMKG dari berkas lokal
             if os.path.exists(logo_path):
                 try:
                     img = OpenpyxlImage(logo_path)
-                    img.width = 80; img.height = 80
+                    img.width = 45; img.height = 45
                     ws.add_image(img, f'A{start_row}')
                 except:
                     pass
@@ -375,7 +374,6 @@ def generate_excel_from_template_speci(df_clean, report_type="SPECI", template_p
         ws.page_margins.bottom = 0.75
         ws.print_options.horizontalCentered = True 
         
-        # KOP 1 KALI UNTUK SATU BULAN PENUH (Baris 1-7)
         ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=10)
         c1 = ws.cell(row=1, column=1, value="BALAI BESAR METEOROLOGI KLIMATOLOGI DAN GEOFISIKA WILAYAH III")
         c1.font = font_kop_bold; c1.alignment = align_center; ws.row_dimensions[1].height = 18
@@ -391,7 +389,7 @@ def generate_excel_from_template_speci(df_clean, report_type="SPECI", template_p
         if os.path.exists(logo_path):
             try:
                 img = OpenpyxlImage(logo_path)
-                img.width = 80; img.height = 80
+                img.width = 45; img.height = 45
                 ws.add_image(img, 'A1')
             except:
                 pass
@@ -405,7 +403,6 @@ def generate_excel_from_template_speci(df_clean, report_type="SPECI", template_p
         c_date.font = font_kop_bold; c_date.alignment = align_left
         ws.row_dimensions[5].height = 8
 
-        # HEADER TABEL (Baris 6-7)
         for c_i, h_text in enumerate(headers_table, start=1):
             ws.merge_cells(start_row=6, start_column=c_i, end_row=7, end_column=c_i)
             cell_h = ws.cell(row=6, column=c_i, value=h_text)
@@ -414,7 +411,6 @@ def generate_excel_from_template_speci(df_clean, report_type="SPECI", template_p
                 ws.cell(row=r_sub, column=c_i).border = thin_border
         ws.row_dimensions[6].height = 15; ws.row_dimensions[7].height = 15
         
-        # MENGUNCI HEADER TABEL SAAT DILANJUTKAN KE HALAMAN KEDUA
         ws.print_title_rows = '$6:$7'
 
         data_row_idx = 8
@@ -454,6 +450,82 @@ def generate_excel_from_template_speci(df_clean, report_type="SPECI", template_p
     buffer.seek(0)
     return buffer
 
+# =================================================================================================
+# ===== EXCEL TEMPLATE INSERTER (WXREV: BERDASARKAN TEMPLATE WXREV.XLSX) ==========================
+# =================================================================================================
+def generate_excel_from_template_wxrev(df_wxrev, template_path="TEMPLATE WXREV.xlsx"):
+    if not os.path.exists(template_path):
+        template_path = "TEMPLATE WXREV.xlsx"
+
+    buffer = io.BytesIO()
+    wb = openpyxl.load_workbook(template_path)
+    
+    if "Sheet1" in wb.sheetnames:
+        ws_template = wb["Sheet1"]
+    else:
+        ws_template = wb.active
+
+    thin_side = Side(style='thin', color='000000')
+    thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+    align_center = Alignment(horizontal='center', vertical='center')
+    font_data = Font(name='Arial', size=9)
+
+    df_wxrev['year'] = df_wxrev['datetime'].dt.year
+    df_wxrev['month'] = df_wxrev['datetime'].dt.month
+    df_wxrev['day'] = df_wxrev['datetime'].dt.day
+
+    grouped_months = df_wxrev.groupby(['year', 'month'])
+    
+    for (year, month), month_group in grouped_months:
+        nama_bulan = BULAN_INDO[month]
+        sheet_name = f"WXREV {nama_bulan[:3]}"
+        
+        ws = wb.copy_worksheet(ws_template)
+        ws.title = sheet_name
+        
+        # 1. BULAN DI CELL F4
+        ws['F4'].value = f"{nama_bulan} {year}"
+        
+        # Tanggal TTD di H40
+        num_days = calendar.monthrange(year, month)[1]
+        ws['H40'].value = f"WAINGAPU, {num_days:02d} {nama_bulan} {year}"
+        
+        day_map = {r['day']: r for _, r in month_group.iterrows()}
+        
+        # 2. ISU SEL DARI BARIS 8 SAMPAI BARIS 38 (C8:J38)
+        for d in range(1, 32):
+            target_row = 7 + d # Hari 1 -> Row 8, Hari 31 -> Row 38
+            
+            if d <= num_days and d in day_map:
+                row = day_map[d]
+                mmyyg = str(row['MMYYGp']) if pd.notna(row['MMYYGp']) else ''
+                iiiii = str(row['IIiii']) if pd.notna(row['IIiii']) else ''
+                att = str(row['atTxTxTnTn']) if pd.notna(row['atTxTxTnTn']) else ''
+                app = str(row['apPxPxPnPn']) if pd.notna(row['apPxPxPnPn']) else ''
+                auu = str(row['auUxUxUnUn']) if pd.notna(row['auUxUxUnUn']) else ''
+                arr = str(row['arRRRR']) if pd.notna(row['arRRRR']) else ''
+                rdrd = str(row['rDrDdfmfm_1']) if pd.notna(row['rDrDdfmfm_1']) else ''
+                
+                # Jam kirim (Format HH:MM WITA)
+                dt_send = row['datetime']
+                jam_kirim = dt_send.strftime('%H:%M WITA') if pd.notna(dt_send) else ''
+                
+                vals = [mmyyg, iiiii, att, app, auu, arr, rdrd, jam_kirim]
+            else:
+                vals = ['-', '-', '-', '-', '-', '-', '-', '-'] if d <= num_days else ['', '', '', '', '', '', '', '']
+                
+            col_indices = [3, 4, 5, 6, 7, 8, 9, 10] # Kolom C, D, E, F, G, H, I, J
+            for col_idx, val in zip(col_indices, vals):
+                cell = ws.cell(row=target_row, column=col_idx, value=val)
+                cell.font = font_data
+                cell.alignment = align_center
+                cell.border = thin_border
+
+    wb.remove(ws_template)
+    wb.save(buffer)
+    buffer.seek(0)
+    return buffer
+
 def parse_wxrev(sandi_str):
     if pd.isna(sandi_str):
         return None
@@ -480,106 +552,6 @@ def parse_wxrev(sandi_str):
     rdrd2 = tokens[8] if len(tokens) > 8 else ""
     
     return [tgl, mmyygp, iiiii, att, app, auu, arr, rdrd1, rdrd2]
-
-def generate_pdf_bytes_wxrev(df_clean, logo_path):
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=75, topMargin=20, bottomMargin=20)
-    story = []
-    
-    styles = getSampleStyleSheet()
-    header_title_style = ParagraphStyle('HeaderTitle', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=10, leading=13, alignment=1)
-    header_sub_style = ParagraphStyle('HeaderSub', parent=styles['Normal'], fontName='Helvetica', fontSize=8, leading=11, alignment=1)
-    center_title_style = ParagraphStyle('CenterTitle', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=11, leading=15, alignment=1)
-    
-    station_name = df_clean['station_name'].iloc[0].upper() if 'station_name' in df_clean.columns else "STASIUN METEOROLOGI"
-    
-    text_block = [
-        Paragraph("<b>BADAN METEOROLOGI KLIMATOLOGI DAN GEOFISIKA</b>", header_title_style),
-        Paragraph(f"<b>{station_name}</b>", header_title_style),
-        Paragraph("Alamat : JL.ADI SUCIPTO NO.3 | Telp. (0387)61227 | Email : stamet.waingapu@gmail.com", header_sub_style),
-    ]
-    
-    total_width = 500  
-    if logo_path and os.path.exists(logo_path):
-        logo_img = Image(logo_path, width=48, height=48)
-        header_table = Table([[logo_img, text_block, ""]], colWidths=[50, 430, 20])
-        header_table.setStyle(TableStyle([
-            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'), ('ALIGN', (0,0), (0,0), 'CENTER'), ('ALIGN', (1,0), (1,0), 'CENTER'),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 4), ('TOPPADDING', (0,0), (-1,-1), 0), ('LINEBELOW', (0,0), (-1,-1), 1.2, colors.black),
-            ('LEFTPADDING', (1,0), (1,0), 0), ('RIGHTPADDING', (1,0), (1,0), 0)
-        ]))
-    else:
-        header_table = Table([[text_block]], colWidths=[total_width])
-        header_table.setStyle(TableStyle([
-            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'), ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 4), ('LINEBELOW', (0,0), (-1,-1), 1.2, colors.black),
-        ]))
-        
-    story.append(header_table)
-    story.append(Spacer(1, 8))
-    
-    dt_first = df_clean['datetime'].iloc[0] if not df_clean.empty else datetime.now()
-    bulan_str = BULAN_INDO.get(dt_first.month, "").upper()
-    tahun_str = dt_first.year
-    
-    story.append(Paragraph("<b>KUMPULAN BERITA WXREV</b>", center_title_style))
-    story.append(Paragraph(f"<b>{bulan_str} {tahun_str}</b>", center_title_style))
-    story.append(Spacer(1, 8))
-    
-    headers = ['TGL', 'MMYYGp', 'IIiii', 'atTxTxTnTn', 'apPxPxPnPn', 'auUxUxUnUn', 'arRRRR', 'rDrDdfmfm', 'rDrDdfmfm']
-    table_data = [headers]
-    
-    for _, row in df_clean.iterrows():
-        table_data.append([
-            str(row['TGL']), str(row['MMYYGp']), str(row['IIiii']),
-            str(row['atTxTxTnTn']), str(row['apPxPxPnPn']), str(row['auUxUxUnUn']),
-            str(row['arRRRR']), str(row['rDrDdfmfm_1']), str(row['rDrDdfmfm_2'])
-        ])
-        
-    base_table_style = [
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'), ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'), ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-        ('FONTSIZE', (0, 0), (-1, -1), 8), ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
-        ('TOPPADDING', (0, 0), (-1, -1), 2), ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
-        ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
-    ]
-    
-    col_widths = [30, 50, 45, 66, 66, 66, 55, 61, 61]
-    wx_table = Table(table_data, colWidths=col_widths)
-    wx_table.setStyle(TableStyle(base_table_style))
-    story.append(wx_table)
-    
-    doc.build(story)
-    buffer.seek(0)
-    return buffer
-
-def generate_excel_bytes_wxrev(df_clean):
-    buffer = io.BytesIO()
-    headers_excel = ['TGL', 'MMYYGp', 'IIiii', 'atTxTxTnTn', 'apPxPxPnPn', 'auUxUxUnUn', 'arRRRR', 'rDrDdfmfm_1', 'rDrDdfmfm_2']
-    df_export = df_clean[headers_excel].copy()
-    
-    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        df_export.to_excel(writer, sheet_name='WXREV', index=False, header=['TGL', 'MMYYGp', 'IIiii', 'atTxTxTnTn', 'apPxPxPnPn', 'auUxUxUnUn', 'arRRRR', 'rDrDdfmfm', 'rDrDdfmfm'])
-        worksheet = writer.sheets['WXREV']
-        
-        header_font = Font(name='Segoe UI', size=11, bold=True, color='FFFFFF')
-        header_fill = PatternFill(start_color='1F4E78', end_color='1F4E78', fill_type='solid')
-        align_center = Alignment(horizontal='center', vertical='center')
-        thin_border = Border(left=Side(style='thin', color='D9D9D9'), right=Side(style='thin', color='D9D9D9'), top=Side(style='thin', color='D9D9D9'), bottom=Side(style='thin', color='D9D9D9'))
-        
-        for cell in worksheet[1]:
-            cell.font, cell.fill, cell.alignment, cell.border = header_font, header_fill, align_center, thin_border
-            
-        for row in worksheet.iter_rows(min_row=2, max_row=worksheet.max_row, min_col=1, max_col=worksheet.max_column):
-            for cell in row:
-                cell.border, cell.font, cell.alignment = thin_border, Font(name='Segoe UI', size=10), align_center
-        
-        for col in worksheet.columns:
-            max_len = max([len(str(cell.value)) for cell in col if cell.value] + [0])
-            worksheet.column_dimensions[get_column_letter(col[0].column)].width = max(max_len + 3, 11)
-            
-    buffer.seek(0)
-    return buffer
 
 def generate_pdf_bytes_thunderstorm(df_clean, station_name, kepala_nama, kepala_nip):
     buffer = io.BytesIO()
@@ -1443,7 +1415,7 @@ menu = st.sidebar.radio(
     ]
 )
 st.sidebar.markdown("---")
-st.sidebar.info("Aplikasi ekstraksi data Sandi Cuaca (METAR, SPECI, WXREV, Thunderstorm, Perawanan, Pibal, Hujan/Penguapan, & LPM) menjadi Laporan PDF & Excel otomatis.")
+st.sidebar.info("Aplikasi ekstraksi data Sandi Cuaca (METAR, SPECI, WXREV, Thunderstorm, Perawanan, Pibal, Hujan/Penguapan, & LPM) menjadi Laporan Excel otomatis.")
 
 LOGO_FILE = "logo_bmkg.png"
 
@@ -1564,11 +1536,12 @@ elif menu == "SPECI Converter":
 
 # --- HALAMAN WXREV ---
 elif menu == "WXREV Converter":
-    st.title("🌧️ WXREV to PDF & Excel Converter")
+    st.title("🌧️ WXREV to Excel Converter")
     with st.expander("ℹ️ Klik di sini untuk melihat Petunjuk Penggunaan"):
         st.markdown("""
         **Syarat File CSV:**
         - File hasil extract dari "https://bmkgsatu.bmkg.go.id/extractgts" data WXREV.
+        - Menggunakan template `TEMPLATE WXREV.xlsx`.
         """)
     uploaded_file = st.file_uploader("Upload file CSV WXREV", type=["csv"])
     if uploaded_file is not None:
@@ -1596,16 +1569,20 @@ elif menu == "WXREV Converter":
                         df_wxrev = df_wxrev.sort_values(by='TGL').reset_index(drop=True)
                         
                         st.success(f"Berhasil memproses {len(df_wxrev)} data WXREV harian!")
-                        pdf_data = generate_pdf_bytes_wxrev(df_wxrev, LOGO_FILE)
-                        excel_data = generate_excel_bytes_wxrev(df_wxrev)
+                        
+                        DEFAULT_TEMPLATE_WXREV = "TEMPLATE WXREV.xlsx"
+                        if os.path.exists(DEFAULT_TEMPLATE_WXREV):
+                            excel_data = generate_excel_from_template_wxrev(df_wxrev, template_path=DEFAULT_TEMPLATE_WXREV)
+                        else:
+                            st.warning(f"⚠️ File '{DEFAULT_TEMPLATE_WXREV}' tidak ditemukan. Menggunakan format Excel standar.")
+                            excel_data = generate_excel_bytes_wxrev(df_wxrev)
+                            
                         dt_first = df_wxrev['datetime'].iloc[0]
                         nama_file_base = f"REKAP_WXREV_{BULAN_INDO.get(dt_first.month, '').upper()}_{dt_first.year}"
                         
                         st.write("---")
                         st.subheader("Unduh Laporan WXREV")
-                        col_pdf, col_xlsx = st.columns(2)
-                        with col_pdf: st.download_button(label="📥 Download PDF", data=pdf_data, file_name=f"{nama_file_base}.pdf", mime="application/pdf")
-                        with col_xlsx: st.download_button(label="📊 Download Excel", data=excel_data, file_name=f"{nama_file_base}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                        st.download_button(label="📊 Download Excel", data=excel_data, file_name=f"{nama_file_base}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         except Exception as e: st.error(f"Terjadi kesalahan: {e}")
 
 # --- HALAMAN THUNDERSTORM EXPORTER ---
