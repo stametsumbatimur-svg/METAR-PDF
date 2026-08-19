@@ -556,92 +556,10 @@ def parse_wxrev(sandi_str):
     
     return [tgl, mmyygp, iiiii, att, app, auu, arr, rdrd1, rdrd2]
 
-def generate_pdf_bytes_thunderstorm(df_clean, station_name, kepala_nama, kepala_nip):
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), rightMargin=25, leftMargin=25, topMargin=25, bottomMargin=25)
-    story = []
-    
-    styles = getSampleStyleSheet()
-    title_style = ParagraphStyle('TSTitle', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=12, leading=16, alignment=1)
-    meta_style = ParagraphStyle('TSMeta', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=10, leading=14, alignment=1)
-    text_style = ParagraphStyle('TSText', parent=styles['Normal'], fontName='Helvetica', fontSize=8, leading=11)
-    
-    tahun = df_clean['datetime'].dt.year.iloc[0]
-    
-    story.append(Paragraph("DATA THUNDERSTORM", title_style))
-    story.append(Paragraph(f"{station_name.upper()}", meta_style))
-    story.append(Paragraph(f"TAHUN: {tahun}", meta_style))
-    story.append(Spacer(1, 10))
-    
-    matrix = {m: {d: "" for d in range(1, 32)} for m in range(1, 13)}
-    
-    df_clean['day'] = df_clean['datetime'].dt.day
-    df_clean['month'] = df_clean['datetime'].dt.month
-    df_clean['is_ts'] = df_clean.apply(lambda r: check_is_thunderstorm(r['WX'], r['CLOUD']), axis=1)
-    
-    observed_dates = df_clean[['month', 'day']].drop_duplicates()
-    for _, r in observed_dates.iterrows():
-        matrix[r['month']][r['day']] = "O"
-        
-    ts_dates = df_clean[df_clean['is_ts'] == True][['month', 'day']].drop_duplicates()
-    for _, r in ts_dates.iterrows():
-        matrix[r['month']][r['day']] = "X"
-        
-    header_row = ['TANGGAL\nBULAN'] + [str(d) for d in range(1, 32)]
-    table_data = [header_row]
-    
-    for m in range(1, 13):
-        row = [BULAN_INDO[m]]
-        for d in range(1, 32):
-            row.append(matrix[m][d])
-        table_data.append(row)
-        
-    col_widths = [85] + [22] * 31
-    ts_table = Table(table_data, colWidths=col_widths)
-    
-    ts_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey), ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'), ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'), ('FONTSIZE', (0, 0), (-1, -1), 7),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3), ('TOPPADDING', (0, 0), (-1, -1), 3),
-        ('ALIGN', (0, 1), (0, -1), 'LEFT'), ('FONTNAME', (0, 1), (0, -1), 'Helvetica-Bold'),
-    ]))
-    
-    story.append(ts_table)
-    story.append(Spacer(1, 15))
-    
-    tgl_sekarang = datetime.now()
-    tgl_ttd = f"WAINGAPU, {tgl_sekarang.day} {BULAN_INDO[tgl_sekarang.month]} {tgl_sekarang.year}"
-    
-    ket_text = """<b>KETERANGAN:</b><br/>
-    <b>X</b> : Ada satu atau lebih kilat / thunderstorm dalam sandi wwW1W2.<br/>
-    <b>O</b> : Tidak ada kilat / thunderstorm dalam sandi wwW1W2.<br/>
-    &nbsp;&nbsp;&nbsp;&nbsp;: Tidak ada pengamatan.
-    """
-    
-    ttd_text = f"""{tgl_ttd}<br/>
-    <b>KEPALA STASIUN</b><br/>
-    <b>BADAN METEOROLOGI KLIMATOLOGI DAN GEOFISIKA</b><br/>
-    <b>{station_name.upper()}</b><br/><br/><br/><br/>
-    <b><u>{kepala_nama}</u></b>
-    """
-    
-    ket_p = Paragraph(ket_text, text_style)
-    ttd_p = Paragraph(ttd_text, ParagraphStyle('TTD', parent=text_style, alignment=1))
-    
-    footer_table = Table([[ket_p, ttd_p]], colWidths=[400, 367])
-    footer_table.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'), ('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-    ]))
-    
-    story.append(KeepTogether(footer_table))
-    doc.build(story)
-    buffer.seek(0)
-    return buffer
-
 def generate_excel_from_template_thunderstorm(df_clean, template_path="TEMPLATE THUNDERSTORM.xlsx"):
     """
-    Mengisi matriks kejadian Thunderstorm ke TEMPLATE THUNDERSTORM.xlsx murni tanpa mengubah KOP/TTD.
+    Mengisi matriks kejadian Thunderstorm ke TEMPLATE THUNDERSTORM.xlsx
+    Aman dari kesalahan pengisian sel ter-merge (MergedCell).
     """
     buffer = io.BytesIO()
     
@@ -649,7 +567,6 @@ def generate_excel_from_template_thunderstorm(df_clean, template_path="TEMPLATE 
         wb = openpyxl.load_workbook(template_path)
         ws = wb["Sheet1"] if "Sheet1" in wb.sheetnames else wb.active
     else:
-        # Fallback jika file template fisik tidak ditemukan di folder utama
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Sheet1"
@@ -667,9 +584,9 @@ def generate_excel_from_template_thunderstorm(df_clean, template_path="TEMPLATE 
     align_center = Alignment(horizontal='center', vertical='center')
     font_data = Font(name='Arial', size=10)
 
-    # 1. Update Tahun saja di Cell A3
+    # 1. Update Tahun di Cell A3
     tahun = df_clean['datetime'].dt.year.iloc[0]
-    ws.cell(row=3, column=1, value=f"TAHUN : {tahun}")
+    safe_set_cell(ws, 3, 1, f"TAHUN : {tahun}")
 
     # 2. Pemetaan Matriks (12 Bulan x 31 Hari)
     matrix = {m: {d: "" for d in range(1, 32)} for m in range(1, 13)}
@@ -688,17 +605,21 @@ def generate_excel_from_template_thunderstorm(df_clean, template_path="TEMPLATE 
     for _, r in ts_dates.iterrows():
         matrix[r['month']][r['day']] = "X"
 
-    # 3. Pengisian Data Matriks ke Sel B6:AF17
+    # 3. Pengisian Data Matriks ke Sel B6:AF17 (Menggunakan safe_set_cell)
     for m in range(1, 13):
         target_row = 5 + m  # Januari (m=1) -> Row 6
         for d in range(1, 32):
             target_col = 1 + d  # Tanggal 1 (d=1) -> Kolom B (2)
             val = matrix[m][d]
             
-            cell = ws.cell(row=target_row, column=target_col, value=val)
-            cell.font = font_data
-            cell.alignment = align_center
-            cell.border = thin_border
+            # Gunakan penulisan aman untuk menghindari error MergedCell
+            safe_set_cell(ws, target_row, target_col, val)
+            
+            cell = ws.cell(row=target_row, column=target_col)
+            if not isinstance(cell, MergedCell):
+                cell.font = font_data
+                cell.alignment = align_center
+                cell.border = thin_border
 
     wb.save(buffer)
     buffer.seek(0)
