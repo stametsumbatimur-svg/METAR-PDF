@@ -463,7 +463,7 @@ def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3
                 cell.border = thin_border
 
         # 5. Pasang Row Page Breaks Otomatis Presisi Setelah Hari Berakhir (Baris 31, 55, 79, ...)
-        ws.row_breaks.clear()
+        ws.row_breaks.brk = []  # Reset list row breaks bawaan secara aman
         for d in range(1, num_days):
             break_row = 8 + (d * 24) - 1 # Tepat setelah jam 23:00Z tanggal tersebut
             ws.row_breaks.append(Break(id=break_row))
