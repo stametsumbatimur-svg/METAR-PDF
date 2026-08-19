@@ -1177,7 +1177,7 @@ def process_template_penguapan(wb, df_penguapan_full, target_year, target_month,
 # ===== LAMA PENYINARAN MATAHARI (LPM) FUNCTIONS ==========
 # =========================================================
 
-def process_template_lpm(wb, df_lpm_month, year, month, num_days, nama_bulan, kepala_nama, kepala_nip):
+def process_template_lpm(wb, df_lpm_month, year, month, num_days, nama_bulan):
     ws = wb['LPM'] if 'LPM' in wb.sheetnames else wb.active
     
     safe_set_cell(ws, 5, 4, f": {nama_bulan}") # Cell D5
@@ -1193,8 +1193,6 @@ def process_template_lpm(wb, df_lpm_month, year, month, num_days, nama_bulan, ke
     if df_lpm_month is not None and not df_lpm_month.empty:
         for _, r in df_lpm_month.iterrows():
             month_data[r['day']] = r
-            
-    last_observer = ""
 
     for d in range(1, 32):
         r = 13 + d
@@ -1220,22 +1218,9 @@ def process_template_lpm(wb, df_lpm_month, year, month, num_days, nama_bulan, ke
                 tot12 = row_data.get('ss_total_12')
                 safe_set_cell(ws, r, 15, float(tot8) if pd.notna(tot8) else "-")
                 safe_set_cell(ws, r, 17, float(tot12) if pd.notna(tot12) else "-")
-                
-                if pd.notna(row_data.get('observer_name')):
-                    last_observer = str(row_data['observer_name'])
             else:
                 for col_idx in range(3, 19):
                     safe_set_cell(ws, r, col_idx, "-")
-                    
-    tgl_sekarang = datetime.now()
-    tgl_ttd = f"WAINGAPU, {num_days} {nama_bulan} {year}"
-    safe_set_cell(ws, 48, 13, tgl_ttd) # Cell M48
-    safe_set_cell(ws, 55, 2, kepala_nama) # Cell B55
-    if kepala_nip:
-        safe_set_cell(ws, 56, 2, f"NIP. {kepala_nip}") # Cell B56
-        
-    if last_observer:
-        safe_set_cell(ws, 55, 13, last_observer.upper()) # Cell M55
         
     return wb
 
@@ -1457,7 +1442,6 @@ elif menu == "Thunderstorm Exporter":
             df_clean['datetime'] = pd.to_datetime(df_clean['raw_timestamp'])
             df_clean = df_clean.sort_values(by='datetime').reset_index(drop=True)
             
-            # Excel Generator murni dari Template
             excel_data = generate_excel_from_template_thunderstorm(df_clean, template_path=DEFAULT_TEMPLATE_TS)
                 
             tahun = df_clean['datetime'].dt.year.iloc[0]
@@ -1753,10 +1737,6 @@ elif menu == "Form Lama Penyinaran Matahari (LPM)":
     
     DEFAULT_TEMPLATE_LPM = "TEMPLATE LPM.xlsx"
     
-    with st.expander("⚙️ Pengaturan Header & Tanda Tangan"):
-        kp_nama = st.text_input("Nama Kepala Stasiun", "Carles Alexander Tari, S.TP", key="lpm_kp")
-        kp_nip = st.text_input("NIP Kepala Stasiun", "197712082001121001", key="lpm_nip")
-        
     uploaded_lpm_file = st.file_uploader("Upload File CSV Lama Penyinaran Matahari", type=["csv"], key="lpm_uploader")
     
     if uploaded_lpm_file:
@@ -1788,7 +1768,7 @@ elif menu == "Form Lama Penyinaran Matahari (LPM)":
                             num_days = calendar.monthrange(year, month)[1]
                             
                             wb_lpm = openpyxl.load_workbook(DEFAULT_TEMPLATE_LPM)
-                            wb_lpm = process_template_lpm(wb_lpm, month_group, year, month, num_days, nama_bulan, kp_nama, kp_nip)
+                            wb_lpm = process_template_lpm(wb_lpm, month_group, year, month, num_days, nama_bulan)
                             
                             excel_buffer = io.BytesIO()
                             wb_lpm.save(excel_buffer)
