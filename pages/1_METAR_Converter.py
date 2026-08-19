@@ -385,6 +385,7 @@ def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3
     thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
     align_center = Alignment(horizontal='center', vertical='center')
     align_right = Alignment(horizontal='right', vertical='center')
+    align_left = Alignment(horizontal='left', vertical='center') # <-- PERBAIKAN: DIDEKLARASIKAN DI SINI
     
     font_kop_bold = Font(name='Arial', size=11, bold=True)
     font_tbl_header = Font(name='Arial', size=9, bold=True)
@@ -417,7 +418,10 @@ def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3
         ws.page_setup.orientation = ws.ORIENTATION_PORTRAIT
         
         num_days = calendar.monthrange(year, month)[1]
-        ws.row_breaks.brk = []
+        
+        # Bersihkan array breaks dengan aman
+        if hasattr(ws, 'row_breaks') and hasattr(ws.row_breaks, 'brk'):
+            ws.row_breaks.brk = []
 
         # MEMBUAT BLOK HARIAN LENGKAP (KOP + LOGO + TANGGAL + TABEL 24 JAM) UNTUK SETIAP HARI
         for d in range(1, num_days + 1):
