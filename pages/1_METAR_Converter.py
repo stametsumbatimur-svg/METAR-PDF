@@ -354,7 +354,7 @@ def generate_excel_bytes_metar_speci(df_clean, report_type="METAR"):
     return buffer
 
 # =========================================================================================
-# ===== EXCEL TEMPLATE INSERTER (KOP UTUH PRESISI + AUTOMATIC PAGE BREAKS PER HARI) ========
+# ===== EXCEL TEMPLATE INSERTER (KOP UTUH PRESISI + ROW BREAKS OTOMATIS PER HARI) ==========
 # =========================================================================================
 def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3.xlsx"):
     if not os.path.exists(template_path):
@@ -462,10 +462,10 @@ def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3
                 cell.alignment = align_center
                 cell.border = thin_border
 
-        # 5. Pasang Page Breaks Otomatis Setiap Pergantian Hari (Setiap 24 Jam)
+        # 5. Pasang Row Page Breaks Otomatis Setiap Pergantian Hari (Per 24 Jam)
         for d in range(1, num_days):
             break_row = 8 + (d * 24)
-            ws.page_breaks.append(Break(id=break_row))
+            ws.row_breaks.append(Break(id=break_row))
 
     wb.remove(ws_template)
     
