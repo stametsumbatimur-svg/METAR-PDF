@@ -451,7 +451,7 @@ def generate_excel_from_template_speci(df_clean, report_type="SPECI", template_p
     return buffer
 
 # =================================================================================================
-# ===== EXCEL TEMPLATE INSERTER (WXREV: BERDASARKAN TEMPLATE WXREV.XLSX) ==========================
+# ===== EXCEL TEMPLATE INSERTER (WXREV: BERDASARKAN TEMPLATE WXREV.XLSX & CELL G4) ================
 # =================================================================================================
 def generate_excel_from_template_wxrev(df_wxrev, template_path="TEMPLATE WXREV.xlsx"):
     if not os.path.exists(template_path):
@@ -462,6 +462,8 @@ def generate_excel_from_template_wxrev(df_wxrev, template_path="TEMPLATE WXREV.x
     
     if "Sheet1" in wb.sheetnames:
         ws_template = wb["Sheet1"]
+    elif "TEMPLATE" in wb.sheetnames:
+        ws_template = wb["TEMPLATE"]
     else:
         ws_template = wb.active
 
@@ -483,8 +485,8 @@ def generate_excel_from_template_wxrev(df_wxrev, template_path="TEMPLATE WXREV.x
         ws = wb.copy_worksheet(ws_template)
         ws.title = sheet_name
         
-        # 1. BULAN DI CELL F4
-        ws['F4'].value = f"{nama_bulan} {year}"
+        # 1. BULAN DI CELL G4
+        ws['G4'].value = f"{nama_bulan} {year}"
         
         # Tanggal TTD di H40
         num_days = calendar.monthrange(year, month)[1]
@@ -492,7 +494,7 @@ def generate_excel_from_template_wxrev(df_wxrev, template_path="TEMPLATE WXREV.x
         
         day_map = {r['day']: r for _, r in month_group.iterrows()}
         
-        # 2. ISU SEL DARI BARIS 8 SAMPAI BARIS 38 (C8:J38)
+        # 2. ISU SEL DARI BARIS 8 SAMPAI BARIS 38 (C8:K38)
         for d in range(1, 32):
             target_row = 7 + d # Hari 1 -> Row 8, Hari 31 -> Row 38
             
@@ -504,17 +506,18 @@ def generate_excel_from_template_wxrev(df_wxrev, template_path="TEMPLATE WXREV.x
                 app = str(row['apPxPxPnPn']) if pd.notna(row['apPxPxPnPn']) else ''
                 auu = str(row['auUxUxUnUn']) if pd.notna(row['auUxUxUnUn']) else ''
                 arr = str(row['arRRRR']) if pd.notna(row['arRRRR']) else ''
-                rdrd = str(row['rDrDdfmfm_1']) if pd.notna(row['rDrDdfmfm_1']) else ''
+                rdrd1 = str(row['rDrDdfmfm_1']) if pd.notna(row['rDrDdfmfm_1']) else ''
+                rdrd2 = str(row['rDrDdfmfm_2']) if pd.notna(row['rDrDdfmfm_2']) else ''
                 
                 # Jam kirim (Format HH:MM WITA)
                 dt_send = row['datetime']
                 jam_kirim = dt_send.strftime('%H:%M WITA') if pd.notna(dt_send) else ''
                 
-                vals = [mmyyg, iiiii, att, app, auu, arr, rdrd, jam_kirim]
+                vals = [mmyyg, iiiii, att, app, auu, arr, rdrd1, rdrd2, jam_kirim]
             else:
-                vals = ['-', '-', '-', '-', '-', '-', '-', '-'] if d <= num_days else ['', '', '', '', '', '', '', '']
+                vals = ['-', '-', '-', '-', '-', '-', '-', '-', '-'] if d <= num_days else ['', '', '', '', '', '', '', '', '']
                 
-            col_indices = [3, 4, 5, 6, 7, 8, 9, 10] # Kolom C, D, E, F, G, H, I, J
+            col_indices = [3, 4, 5, 6, 7, 8, 9, 10, 11] # Kolom C, D, E, F, G, H, I, J, K
             for col_idx, val in zip(col_indices, vals):
                 cell = ws.cell(row=target_row, column=col_idx, value=val)
                 cell.font = font_data
