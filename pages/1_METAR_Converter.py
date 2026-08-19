@@ -130,233 +130,10 @@ def get_cloud_category(cloud_str, vis_str):
     else:
         return 'CERAH'
 
-# ==========================================
-# ===== PDF GENERATION (DENGAN AUTO-WRAP) ===
-# ==========================================
-def generate_pdf_bytes_metar(df_clean, logo_path):
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=75, topMargin=25, bottomMargin=25)
-    story = []
-    
-    styles = getSampleStyleSheet()
-    header_text_style = ParagraphStyle('HeaderCenterText', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=11, leading=15, alignment=1)
-    
-    cell_style_center = ParagraphStyle('CellCenter', parent=styles['Normal'], fontName='Helvetica', fontSize=7.5, leading=9, alignment=1)
-    cell_style_bold = ParagraphStyle('CellHeaderCenter', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=8, leading=10, alignment=1)
-
-    nama_stasiun = df_clean['station_name'].iloc[0].upper() if 'station_name' in df_clean.columns else "STASIUN METEOROLOGI"
-    grouped = df_clean.groupby('date_group')
-    
-    for count, (date, group) in enumerate(grouped):
-        if count > 0: story.append(PageBreak())
-            
-        nama_bulan = BULAN_INDO[date.month]
-        tanggal_at = f"{date.day:02d} {nama_bulan} {date.year}"
-        judul_rekap = f"REKAP DATA METAR: {tanggal_at}".upper()
-        text_block = [
-            Paragraph("<b>BALAI BESAR METEOROLOGI KLIMATOLOGI DAN GEOFISIKA WILAYAH III</b>", header_text_style),
-            Paragraph(f"<b>{nama_stasiun}</b>", header_text_style),
-            Paragraph("<b>JL. ADI SUCIPTO NO. 3</b>", header_text_style),
-            Paragraph(f"<b>{judul_rekap}</b>", header_text_style)
-        ]
-        
-        if logo_path and os.path.exists(logo_path):
-            logo_img = Image(logo_path, width=48, height=48)
-            header_table = Table([[logo_img, text_block, ""]], colWidths=[50, 430, 20])
-            header_table.setStyle(TableStyle([
-                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'), ('ALIGN', (0,0), (0,0), 'CENTER'), ('ALIGN', (1,0), (1,0), 'CENTER'),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 6), ('TOPPADDING', (0,0), (-1,-1), 0), ('LINEBELOW', (0,0), (-1,-1), 1.5, colors.black),
-                ('LEFTPADDING', (1,0), (1,0), 0), ('RIGHTPADDING', (1,0), (1,0), 0)
-            ]))
-        else:
-            header_table = Table([[text_block]], colWidths=[500])
-            header_table.setStyle(TableStyle([
-                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'), ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 6), ('LINEBELOW', (0,0), (-1,-1), 1.5, colors.black),
-            ]))
-            
-        story.append(header_table)
-        story.append(Spacer(1, 10))
-        
-        headers_raw = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK']
-        headers_p = [Paragraph(h, cell_style_bold) for h in headers_raw]
-        table_data = [headers_p]
-        
-        base_table_style = [
-            ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey), ('ALIGN', (0, 0), (-1, -1), 'CENTER'), ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.black), ('BOTTOMPADDING', (0, 0), (-1, -1), 2), ('TOPPADDING', (0, 0), (-1, -1), 2),
-            ('LEFTPADDING', (0, 0), (-1, -1), 1), ('RIGHTPADDING', (0, 0), (-1, -1), 1),
-        ]
-        
-        for idx, row in group.iterrows():
-            current_row_idx = len(table_data)
-            
-            p_type = Paragraph(str(row['TYPE']), cell_style_center)
-            p_loc = Paragraph(str(row['LOC']), cell_style_center)
-            p_time = Paragraph(str(row['TIME']), cell_style_center)
-            p_wind = Paragraph(str(row['WIND']), cell_style_center)
-            p_tdp = Paragraph(str(row['T/DP']), cell_style_center)
-            p_qnh = Paragraph(str(row['QNH']), cell_style_center)
-            p_rmk = Paragraph(str(row['RMK']), cell_style_center)
-
-            if str(row['VIS']) == 'CAVOK':
-                p_vis = Paragraph('CAVOK', cell_style_center)
-                row_data = [p_type, p_loc, p_time, p_wind, p_vis, Paragraph('', cell_style_center), Paragraph('', cell_style_center), p_tdp, p_qnh, p_rmk]
-                base_table_style.append(('SPAN', (4, current_row_idx), (6, current_row_idx)))
-            else:
-                p_vis = Paragraph(str(row['VIS']), cell_style_center)
-                p_wx = Paragraph(str(row['WX']), cell_style_center)
-                p_cloud = Paragraph(str(row['CLOUD']), cell_style_center)
-                row_data = [p_type, p_loc, p_time, p_wind, p_vis, p_wx, p_cloud, p_tdp, p_qnh, p_rmk]
-                
-            table_data.append(row_data)
-            
-        col_widths = [38, 32, 45, 55, 30, 32, 120, 42, 42, 44] 
-        metar_table = Table(table_data, colWidths=col_widths)
-        metar_table.setStyle(TableStyle(base_table_style))
-        story.append(metar_table)
-
-    doc.build(story)
-    buffer.seek(0)
-    return buffer
-
-def generate_pdf_bytes_speci(df_clean, logo_path):
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=75, topMargin=25, bottomMargin=25)
-    story = []
-    
-    styles = getSampleStyleSheet()
-    header_text_style = ParagraphStyle('HeaderCenterText', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=11, leading=15, alignment=1)
-    sub_header_style = ParagraphStyle('SubHeader', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=10, leading=14, spaceAfter=5, spaceBefore=5)
-    cell_style_center = ParagraphStyle('CellCenter', parent=styles['Normal'], fontName='Helvetica', fontSize=7.5, leading=9, alignment=1)
-    cell_style_bold = ParagraphStyle('CellHeaderCenter', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=8, leading=10, alignment=1)
-
-    nama_stasiun = df_clean['station_name'].iloc[0].upper() if 'station_name' in df_clean.columns else "STASIUN METEOROLOGI"
-    
-    df_clean['year'] = df_clean['datetime'].dt.year
-    df_clean['month'] = df_clean['datetime'].dt.month
-    grouped_month = df_clean.groupby(['year', 'month'])
-    
-    for count_month, ((year, month), month_group) in enumerate(grouped_month):
-        if count_month > 0: 
-            story.append(PageBreak())
-            
-        nama_bulan = BULAN_INDO[month]
-        judul_rekap = f"REKAP DATA SPECI BULAN: {nama_bulan} {year}".upper()
-        text_block = [
-            Paragraph("<b>BALAI BESAR METEOROLOGI KLIMATOLOGI DAN GEOFISIKA WILAYAH III</b>", header_text_style),
-            Paragraph(f"<b>{nama_stasiun}</b>", header_text_style),
-            Paragraph("<b>JL. ADI SUCIPTO NO. 3</b>", header_text_style),
-            Paragraph(f"<b>{judul_rekap}</b>", header_text_style)
-        ]
-        
-        if logo_path and os.path.exists(logo_path):
-            logo_img = Image(logo_path, width=48, height=48)
-            header_table = Table([[logo_img, text_block, ""]], colWidths=[50, 430, 20])
-            header_table.setStyle(TableStyle([
-                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'), ('ALIGN', (0,0), (0,0), 'CENTER'), ('ALIGN', (1,0), (1,0), 'CENTER'),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 6), ('TOPPADDING', (0,0), (-1,-1), 0), ('LINEBELOW', (0,0), (-1,-1), 1.5, colors.black),
-                ('LEFTPADDING', (1,0), (1,0), 0), ('RIGHTPADDING', (1,0), (1,0), 0)
-            ]))
-        else:
-            header_table = Table([[text_block]], colWidths=[500])
-            header_table.setStyle(TableStyle([
-                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'), ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 6), ('LINEBELOW', (0,0), (-1,-1), 1.5, colors.black),
-            ]))
-            
-        story.append(header_table)
-        story.append(Spacer(1, 10))
-        
-        grouped_date = month_group.groupby('date_group')
-        for date, date_group in grouped_date:
-            tanggal_format = f"{date.day:02d} {nama_bulan} {year}"
-            
-            group_story = []
-            group_story.append(Paragraph(f"<b>Tanggal: {tanggal_format}</b>", sub_header_style))
-            
-            headers_raw = ['SPECI', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK']
-            headers_p = [Paragraph(h, cell_style_bold) for h in headers_raw]
-            table_data = [headers_p]
-            
-            base_table_style = [
-                ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey), ('ALIGN', (0, 0), (-1, -1), 'CENTER'), ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.black), ('BOTTOMPADDING', (0, 0), (-1, -1), 2), ('TOPPADDING', (0, 0), (-1, -1), 2),
-                ('LEFTPADDING', (0, 0), (-1, -1), 1), ('RIGHTPADDING', (0, 0), (-1, -1), 1),
-            ]
-            
-            for idx, row in date_group.iterrows():
-                current_row_idx = len(table_data)
-                
-                p_type = Paragraph(str(row['TYPE']), cell_style_center)
-                p_loc = Paragraph(str(row['LOC']), cell_style_center)
-                p_time = Paragraph(str(row['TIME']), cell_style_center)
-                p_wind = Paragraph(str(row['WIND']), cell_style_center)
-                p_tdp = Paragraph(str(row['T/DP']), cell_style_center)
-                p_qnh = Paragraph(str(row['QNH']), cell_style_center)
-                p_rmk = Paragraph(str(row['RMK']), cell_style_center)
-
-                if str(row['VIS']) == 'CAVOK':
-                    p_vis = Paragraph('CAVOK', cell_style_center)
-                    row_data = [p_type, p_loc, p_time, p_wind, p_vis, Paragraph('', cell_style_center), Paragraph('', cell_style_center), p_tdp, p_qnh, p_rmk]
-                    base_table_style.append(('SPAN', (4, current_row_idx), (6, current_row_idx)))
-                else:
-                    p_vis = Paragraph(str(row['VIS']), cell_style_center)
-                    p_wx = Paragraph(str(row['WX']), cell_style_center)
-                    p_cloud = Paragraph(str(row['CLOUD']), cell_style_center)
-                    row_data = [p_type, p_loc, p_time, p_wind, p_vis, p_wx, p_cloud, p_tdp, p_qnh, p_rmk]
-                    
-                table_data.append(row_data)
-                
-            col_widths = [38, 32, 45, 55, 30, 32, 120, 42, 42, 44] 
-            speci_table = Table(table_data, colWidths=col_widths)
-            speci_table.setStyle(TableStyle(base_table_style))
-            
-            group_story.append(speci_table)
-            group_story.append(Spacer(1, 15))
-            
-            story.append(KeepTogether(group_story))
-
-    doc.build(story)
-    buffer.seek(0)
-    return buffer
-
-def generate_excel_bytes_metar_speci(df_clean, report_type="METAR"):
-    buffer = io.BytesIO()
-    headers = ['TYPE', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK', 'datetime']
-    df_export = df_clean[headers].copy()
-    df_export.rename(columns={'TYPE': report_type}, inplace=True)
-    df_export['datetime'] = df_export['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S')
-    
-    sheet_title = f"Rekap {report_type}"
-    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        df_export.to_excel(writer, sheet_name=sheet_title, index=False)
-        worksheet = writer.sheets[sheet_title]
-        header_font = Font(name='Segoe UI', size=11, bold=True, color='FFFFFF')
-        header_fill = PatternFill(start_color='1F4E78', end_color='1F4E78', fill_type='solid')
-        align_center, align_left = Alignment(horizontal='center', vertical='center'), Alignment(horizontal='left', vertical='center')
-        thin_border = Border(left=Side(style='thin', color='D9D9D9'), right=Side(style='thin', color='D9D9D9'), top=Side(style='thin', color='D9D9D9'), bottom=Side(style='thin', color='D9D9D9'))
-        
-        for cell in worksheet[1]:
-            cell.font, cell.fill, cell.alignment = header_font, header_fill, align_center
-            
-        for row in worksheet.iter_rows(min_row=2, max_row=worksheet.max_row, min_col=1, max_col=worksheet.max_column):
-            for cell in row:
-                cell.border, cell.font = thin_border, Font(name='Segoe UI', size=10)
-                col_header = worksheet.cell(row=1, column=cell.column).value
-                cell.alignment = align_center if col_header in [report_type, 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'T/DP', 'QNH'] else align_left
-        
-        for col in worksheet.columns:
-            max_len = max([len(str(cell.value)) for cell in col if cell.value] + [0])
-            worksheet.column_dimensions[get_column_letter(col[0].column)].width = max(max_len + 3, 11)
-            
-    buffer.seek(0)
-    return buffer
-
 # =================================================================================================
-# ===== EXCEL TEMPLATE INSERTER (BLOK KOP + LOGO + HEADER UTUH DI SETIAP HARI + MARGIN JILID) =====
+# ===== EXCEL TEMPLATE INSERTER (BLOK KOP + LOGO + HEADER UTUH DI SETIAP HARI + FULL PAGE) ===
 # =================================================================================================
-def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3.xlsx"):
+def generate_excel_from_template_daily(df_clean, report_type="METAR", template_path="TEMPLATE METAR_3.xlsx"):
     if not os.path.exists(template_path):
         for alt in ["TEMPLATE METAR.xlsx", "TEMPLATE METAR_2.xlsx", "TEMPLATE METAR_3.xlsx"]:
             if os.path.exists(alt):
@@ -389,15 +166,16 @@ def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3
     
     font_kop_bold = Font(name='Arial', size=11, bold=True)
     font_tbl_header = Font(name='Arial', size=9, bold=True)
-    font_data = Font(name='Arial', size=9)
+    font_data = Font(name='Arial', size=10) # Diperbesar agar tabel tampak penuh
     
     tbl_header_fill = PatternFill(start_color='D9D9D9', end_color='D9D9D9', fill_type='solid')
-    headers_table = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK']
+    headers_table = [report_type, 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK']
 
     df_clean['year'] = df_clean['datetime'].dt.year
     df_clean['month'] = df_clean['datetime'].dt.month
     df_clean['day'] = df_clean['datetime'].dt.day
-    df_clean['hour'] = df_clean['datetime'].dt.hour
+    if report_type == "METAR":
+        df_clean['hour'] = df_clean['datetime'].dt.hour
     
     grouped_months = df_clean.groupby(['year', 'month'])
     
@@ -405,76 +183,82 @@ def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3
         nama_bulan = BULAN_INDO[month]
         sheet_name = f"{nama_bulan}"
         
-        # Buat sheet baru
         ws = wb.create_sheet(title=sheet_name)
         
         # Atur Lebar Kolom Presisi Sesuai Template
-        col_widths = [10.5, 8.5, 9.5, 9.8, 9.0, 7.1, 14.8, 10.0, 9.2, 12.0]
+        col_widths = [10.5, 8.5, 10.5, 9.8, 9.0, 7.1, 15.5, 10.0, 9.2, 12.0]
         for c_i, w_val in enumerate(col_widths, start=1):
             ws.column_dimensions[get_column_letter(c_i)].width = w_val
 
-        # --- PENGATURAN KERTAS & MARGIN UNTUK JILID ---
+        # --- PENGATURAN KERTAS & MARGIN ---
         ws.sheet_properties.pageSetUpPr.fitToPage = True
         ws.page_setup.paperSize = ws.PAPERSIZE_A4
         ws.page_setup.orientation = ws.ORIENTATION_PORTRAIT
         ws.page_setup.fitToWidth = 1
         ws.page_setup.fitToHeight = False
         
-        ws.page_margins.left = 1.2   # Margin kiri lebih lebar untuk area jilid (~3 cm)
-        ws.page_margins.right = 0.2  # Margin kanan sempit agar tabel muat digeser
+        ws.page_margins.left = 1.0   # Margin kiri lebar untuk jilid
+        ws.page_margins.right = 0.2  
         ws.page_margins.top = 0.75
         ws.page_margins.bottom = 0.75
-        ws.print_options.horizontalCentered = False # Matikan fitur auto-center horizontal
+        ws.print_options.horizontalCentered = True 
         
         num_days = calendar.monthrange(year, month)[1]
         
-        # Bersihkan array breaks dengan aman
         if hasattr(ws, 'row_breaks') and hasattr(ws.row_breaks, 'brk'):
             ws.row_breaks.brk = []
 
-        # MEMBUAT BLOK HARIAN LENGKAP (KOP + LOGO + TANGGAL + TABEL 24 JAM) UNTUK SETIAP HARI
+        current_row = 1
+
+        # LOOP PEMBUATAN BLOK HALAMAN PER HARI
         for d in range(1, num_days + 1):
-            start_row = 1 + (d - 1) * 31  # Hari 1: Row 1, Hari 2: Row 32, Hari 3: Row 63, dst.
+            start_row = current_row
             
-            # --- 1. KOP SURAT (Baris start_row s.d. start_row + 2) ---
+            # --- 1. KOP SURAT ---
             ws.merge_cells(start_row=start_row, start_column=1, end_row=start_row, end_column=10)
             c1 = ws.cell(row=start_row, column=1, value="BALAI BESAR METEOROLOGI KLIMATOLOGI DAN GEOFISIKA WILAYAH III")
             c1.font = font_kop_bold
             c1.alignment = align_center
+            ws.row_dimensions[start_row].height = 18
 
             ws.merge_cells(start_row=start_row+1, start_column=1, end_row=start_row+1, end_column=10)
             c2 = ws.cell(row=start_row+1, column=1, value="STASIUN METEOROLOGI UMBU MEHANG KUNDA")
             c2.font = font_kop_bold
             c2.alignment = align_center
+            ws.row_dimensions[start_row+1].height = 18
 
             ws.merge_cells(start_row=start_row+2, start_column=1, end_row=start_row+2, end_column=10)
             c3 = ws.cell(row=start_row+2, column=1, value="JL. ADI SUCIPTO NO.3")
             c3.font = font_kop_bold
             c3.alignment = align_center
+            ws.row_dimensions[start_row+2].height = 18
 
-            # --- 2. LOGO BMKG DI SEL A1 PADA SETIAP HARI ---
+            # --- 2. LOGO BMKG ---
             if logo_bytes:
                 try:
                     logo_stream = io.BytesIO(logo_bytes)
                     logo_img = OpenpyxlImage(logo_stream)
-                    logo_img.width = 48
-                    logo_img.height = 48
+                    logo_img.width = 45
+                    logo_img.height = 45
                     ws.add_image(logo_img, f'A{start_row}')
                 except:
                     pass
 
-            # --- 3. JUDUL TANGGAL HARIAN (Baris start_row + 3) ---
-            ws.merge_cells(start_row=start_row+3, start_column=4, end_row=start_row+3, end_column=6)
-            c_label = ws.cell(row=start_row+3, column=4, value="REKAP DATA METAR :")
+            # --- 3. JUDUL TANGGAL HARIAN ---
+            ws.merge_cells(start_row=start_row+3, start_column=3, end_row=start_row+3, end_column=6)
+            c_label = ws.cell(row=start_row+3, column=3, value=f"REKAP DATA {report_type} :")
             c_label.font = font_kop_bold
             c_label.alignment = align_right
+            ws.row_dimensions[start_row+3].height = 18
 
-            ws.merge_cells(start_row=start_row+3, start_column=7, end_row=start_row+3, end_column=8)
+            ws.merge_cells(start_row=start_row+3, start_column=7, end_row=start_row+3, end_column=9)
             c_date = ws.cell(row=start_row+3, column=7, value=f"{d:02d} {nama_bulan} {year}")
             c_date.font = font_kop_bold
             c_date.alignment = align_left
 
-            # --- 4. HEADER TABEL METAR (Baris start_row + 5 s.d. start_row + 6) ---
+            ws.row_dimensions[start_row+4].height = 8 # Spasi Kosong
+
+            # --- 4. HEADER TABEL ---
             for c_i, h_text in enumerate(headers_table, start=1):
                 ws.merge_cells(start_row=start_row+5, start_column=c_i, end_row=start_row+6, end_column=c_i)
                 cell_h = ws.cell(row=start_row+5, column=c_i, value=h_text)
@@ -483,47 +267,123 @@ def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3
                 cell_h.alignment = align_center
                 for r_sub in range(start_row+5, start_row+7):
                     ws.cell(row=r_sub, column=c_i).border = thin_border
+            ws.row_dimensions[start_row+5].height = 15
+            ws.row_dimensions[start_row+6].height = 15
 
-            # --- 5. DATA 24 JAM (Baris start_row + 7 s.d. start_row + 30) ---
+            # --- 5. DATA OBSERVASI ---
             day_data = month_group[month_group['day'] == d]
-            day_map = {r['hour']: r for _, r in day_data.iterrows()}
+            data_row_idx = start_row + 7
+            
+            if report_type == "METAR":
+                day_map = {r['hour']: r for _, r in day_data.iterrows()}
+                for h in range(24):
+                    if h in day_map:
+                        row = day_map[h]
+                        metar_type = str(row['TYPE']) if pd.notna(row['TYPE']) else 'METAR'
+                        loc = str(row['LOC']) if pd.notna(row['LOC']) else 'WATU'
+                        time_str = str(row['TIME']) if pd.notna(row['TIME']) else f"{d:02d}{h:02d}00Z"
+                        wind = str(row['WIND']) if pd.notna(row['WIND']) else ''
+                        vis = str(row['VIS']) if pd.notna(row['VIS']) else ''
+                        wx = str(row['WX']) if pd.notna(row['WX']) else ''
+                        cloud = str(row['CLOUD']) if pd.notna(row['CLOUD']) else ''
+                        t_dp = str(row['T/DP']) if pd.notna(row['T/DP']) else ''
+                        qnh = str(row['QNH']) if pd.notna(row['QNH']) else ''
+                        rmk = str(row['RMK']) if pd.notna(row['RMK']) else ''
+                        if vis == 'CAVOK':
+                            wx = ''
+                            cloud = ''
+                        vals = [metar_type, loc, time_str, wind, int(vis) if vis.isdigit() else vis, wx, cloud, t_dp, qnh, rmk]
+                    else:
+                        vals = ['METAR', 'WATU', f"{d:02d}{h:02d}00Z", 'NIL', 'NIL', 'NIL', 'NIL', 'NIL', 'NIL', 'NOSIG']
 
-            for h in range(24):
-                data_row_idx = start_row + 7 + h
-                if h in day_map:
-                    row = day_map[h]
-                    metar_type = str(row['TYPE']) if pd.notna(row['TYPE']) else 'METAR'
-                    loc = str(row['LOC']) if pd.notna(row['LOC']) else 'WATU'
-                    time_str = str(row['TIME']) if pd.notna(row['TIME']) else f"{d:02d}{h:02d}00Z"
-                    wind = str(row['WIND']) if pd.notna(row['WIND']) else ''
-                    vis = str(row['VIS']) if pd.notna(row['VIS']) else ''
-                    wx = str(row['WX']) if pd.notna(row['WX']) else ''
-                    cloud = str(row['CLOUD']) if pd.notna(row['CLOUD']) else ''
-                    t_dp = str(row['T/DP']) if pd.notna(row['T/DP']) else ''
-                    qnh = str(row['QNH']) if pd.notna(row['QNH']) else ''
-                    rmk = str(row['RMK']) if pd.notna(row['RMK']) else ''
-
-                    if vis == 'CAVOK':
-                        wx = ''
-                        cloud = ''
-                    vals = [metar_type, loc, time_str, wind, int(vis) if vis.isdigit() else vis, wx, cloud, t_dp, qnh, rmk]
+                    for col_idx, val in enumerate(vals, start=1):
+                        cell = ws.cell(row=data_row_idx, column=col_idx, value=val)
+                        cell.font = font_data
+                        cell.alignment = align_center
+                        cell.border = thin_border
+                    
+                    # PERBESAR ROW HEIGHT AGAR 1 HARI PENUH 1 HALAMAN A4
+                    ws.row_dimensions[data_row_idx].height = 23.5 
+                    data_row_idx += 1
+            
+            elif report_type == "SPECI":
+                if day_data.empty:
+                    vals = ['SPECI', 'WATU', f"{d:02d}....Z", 'NIL', 'NIL', 'NIL', 'NIL', 'NIL', 'NIL', 'NOSIG']
+                    for col_idx, val in enumerate(vals, start=1):
+                        cell = ws.cell(row=data_row_idx, column=col_idx, value=val)
+                        cell.font = font_data
+                        cell.alignment = align_center
+                        cell.border = thin_border
+                    ws.row_dimensions[data_row_idx].height = 23.5
+                    data_row_idx += 1
                 else:
-                    vals = ['METAR', 'WATU', f"{d:02d}{h:02d}00Z", 'NIL', 'NIL', 'NIL', 'NIL', 'NIL', 'NIL', 'NOSIG']
+                    day_data = day_data.sort_values('datetime')
+                    for _, row in day_data.iterrows():
+                        speci_type = str(row['TYPE']) if pd.notna(row['TYPE']) else 'SPECI'
+                        loc = str(row['LOC']) if pd.notna(row['LOC']) else 'WATU'
+                        time_str = str(row['TIME']) if pd.notna(row['TIME']) else ''
+                        wind = str(row['WIND']) if pd.notna(row['WIND']) else ''
+                        vis = str(row['VIS']) if pd.notna(row['VIS']) else ''
+                        wx = str(row['WX']) if pd.notna(row['WX']) else ''
+                        cloud = str(row['CLOUD']) if pd.notna(row['CLOUD']) else ''
+                        t_dp = str(row['T/DP']) if pd.notna(row['T/DP']) else ''
+                        qnh = str(row['QNH']) if pd.notna(row['QNH']) else ''
+                        rmk = str(row['RMK']) if pd.notna(row['RMK']) else ''
+                        if vis == 'CAVOK':
+                            wx = ''
+                            cloud = ''
+                        vals = [speci_type, loc, time_str, wind, int(vis) if vis.isdigit() else vis, wx, cloud, t_dp, qnh, rmk]
+                        for col_idx, val in enumerate(vals, start=1):
+                            cell = ws.cell(row=data_row_idx, column=col_idx, value=val)
+                            cell.font = font_data
+                            cell.alignment = align_center
+                            cell.border = thin_border
+                        ws.row_dimensions[data_row_idx].height = 23.5
+                        data_row_idx += 1
 
-                for col_idx, val in enumerate(vals, start=1):
-                    cell = ws.cell(row=data_row_idx, column=col_idx, value=val)
-                    cell.font = font_data
-                    cell.alignment = align_center
-                    cell.border = thin_border
-
-            # --- 6. PAGE BREAK PERSIS PADA AKHIR BACAAN HARI INI (BARIS AKHIR BLOK HARI) ---
+            # --- 6. PAGE BREAK SETELAH DATA TERAKHIR HARI INI ---
             if d < num_days:
-                break_row = start_row + 30 # Baris ke-31 setiap blok harian
-                ws.row_breaks.append(Break(id=break_row))
+                ws.row_breaks.append(Break(id=data_row_idx - 1))
+            
+            current_row = data_row_idx
 
+        # Hapus Pengulangan Print Titles karena KOP sudah dipasang manual tiap hari
+        ws.print_title_rows = None 
+        
     wb.remove(ws_template)
-    
     wb.save(buffer)
+    buffer.seek(0)
+    return buffer
+
+def generate_excel_bytes_metar_speci_fallback(df_clean, report_type="METAR"):
+    buffer = io.BytesIO()
+    headers = ['TYPE', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK', 'datetime']
+    df_export = df_clean[headers].copy()
+    df_export.rename(columns={'TYPE': report_type}, inplace=True)
+    df_export['datetime'] = df_export['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    sheet_title = f"Rekap {report_type}"
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+        df_export.to_excel(writer, sheet_name=sheet_title, index=False)
+        worksheet = writer.sheets[sheet_title]
+        header_font = Font(name='Segoe UI', size=11, bold=True, color='FFFFFF')
+        header_fill = PatternFill(start_color='1F4E78', end_color='1F4E78', fill_type='solid')
+        align_center, align_left = Alignment(horizontal='center', vertical='center'), Alignment(horizontal='left', vertical='center')
+        thin_border = Border(left=Side(style='thin', color='D9D9D9'), right=Side(style='thin', color='D9D9D9'), top=Side(style='thin', color='D9D9D9'), bottom=Side(style='thin', color='D9D9D9'))
+        
+        for cell in worksheet[1]:
+            cell.font, cell.fill, cell.alignment = header_font, header_fill, align_center
+            
+        for row in worksheet.iter_rows(min_row=2, max_row=worksheet.max_row, min_col=1, max_col=worksheet.max_column):
+            for cell in row:
+                cell.border, cell.font = thin_border, Font(name='Segoe UI', size=10)
+                col_header = worksheet.cell(row=1, column=cell.column).value
+                cell.alignment = align_center if col_header in [report_type, 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'T/DP', 'QNH'] else align_left
+        
+        for col in worksheet.columns:
+            max_len = max([len(str(cell.value)) for cell in col if cell.value] + [0])
+            worksheet.column_dimensions[get_column_letter(col[0].column)].width = max(max_len + 3, 11)
+            
     buffer.seek(0)
     return buffer
 
@@ -1565,23 +1425,20 @@ if menu == "METAR Converter":
                         if df_clean.empty: st.warning("Tidak ditemukan data METAR dengan menit :00 (per jam) di dalam file ini.")
                         else:
                             st.success(f"Berhasil memproses data METAR!")
-                            pdf_data = generate_pdf_bytes_metar(df_clean, LOGO_FILE)
                             
                             DEFAULT_TEMPLATE_METAR = "TEMPLATE METAR_3.xlsx"
                             if os.path.exists(DEFAULT_TEMPLATE_METAR) or os.path.exists("TEMPLATE METAR_2.xlsx") or os.path.exists("TEMPLATE METAR.xlsx"):
-                                excel_data = generate_excel_from_template_metar(df_clean, template_path=DEFAULT_TEMPLATE_METAR)
+                                excel_data = generate_excel_from_template_daily(df_clean, report_type="METAR", template_path=DEFAULT_TEMPLATE_METAR)
                             else:
                                 st.warning(f"⚠️ File '{DEFAULT_TEMPLATE_METAR}' tidak ditemukan. Menggunakan format Excel standar.")
-                                excel_data = generate_excel_bytes_metar_speci(df_clean, report_type="METAR")
+                                excel_data = generate_excel_bytes_metar_speci_fallback(df_clean, report_type="METAR")
                             
                             first_date = df_clean['date_group'].iloc[0]
                             nama_file_base = f"REKAP_METAR_{first_date.day:02d}_{BULAN_INDO[first_date.month]}_{first_date.year}"
                             
                             st.write("---")
                             st.subheader("Unduh Laporan METAR")
-                            col_pdf, col_xlsx = st.columns(2)
-                            with col_pdf: st.download_button(label="📥 Download PDF", data=pdf_data, file_name=f"{nama_file_base}.pdf", mime="application/pdf")
-                            with col_xlsx: st.download_button(label="📊 Download Excel", data=excel_data, file_name=f"{nama_file_base}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                            st.download_button(label="📊 Download Excel", data=excel_data, file_name=f"{nama_file_base}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         except Exception as e: st.error(f"Terjadi kesalahan: {e}")
 
 # --- HALAMAN SPECI ---
@@ -1622,16 +1479,20 @@ elif menu == "SPECI Converter":
                         df_clean = df_clean.sort_values(by='datetime').reset_index(drop=True)
                         
                         st.success(f"Berhasil memproses {len(df_clean)} data SPECI!")
-                        pdf_data = generate_pdf_bytes_speci(df_clean, LOGO_FILE)
-                        excel_data = generate_excel_bytes_metar_speci(df_clean, report_type="SPECI")
+                        
+                        DEFAULT_TEMPLATE_METAR = "TEMPLATE METAR_3.xlsx"
+                        if os.path.exists(DEFAULT_TEMPLATE_METAR) or os.path.exists("TEMPLATE METAR_2.xlsx") or os.path.exists("TEMPLATE METAR.xlsx"):
+                            excel_data = generate_excel_from_template_daily(df_clean, report_type="SPECI", template_path=DEFAULT_TEMPLATE_METAR)
+                        else:
+                            st.warning(f"⚠️ File '{DEFAULT_TEMPLATE_METAR}' tidak ditemukan. Menggunakan format Excel standar.")
+                            excel_data = generate_excel_bytes_metar_speci_fallback(df_clean, report_type="SPECI")
+                        
                         first_date = df_clean['datetime'].iloc[0]
                         nama_file_base = f"REKAP_SPECI_BULAN_{BULAN_INDO[first_date.month]}_{first_date.year}"
                         
                         st.write("---")
                         st.subheader("Unduh Laporan SPECI")
-                        col_pdf, col_xlsx = st.columns(2)
-                        with col_pdf: st.download_button(label="📥 Download PDF", data=pdf_data, file_name=f"{nama_file_base}.pdf", mime="application/pdf")
-                        with col_xlsx: st.download_button(label="📊 Download Excel", data=excel_data, file_name=f"{nama_file_base}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                        st.download_button(label="📊 Download Excel", data=excel_data, file_name=f"{nama_file_base}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         except Exception as e: st.error(f"Terjadi kesalahan: {e}")
 
 # --- HALAMAN WXREV ---
