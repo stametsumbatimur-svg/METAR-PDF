@@ -163,7 +163,7 @@ def generate_excel_bytes_metar_speci_fallback(df_clean, report_type="METAR"):
     return buffer
 
 # =================================================================================================
-# ===== EXCEL TEMPLATE INSERTER (METAR: HARIAN 1 HALAMAN) ===
+# ===== EXCEL TEMPLATE INSERTER (METAR: HARIAN 1 HALAMAN LENGKAP KOP) =============================
 # =================================================================================================
 def generate_excel_from_template_daily(df_clean, report_type="METAR", template_path="TEMPLATE METAR_3.xlsx", logo_path="logo_bmkg.png"):
     if not os.path.exists(template_path):
@@ -208,12 +208,10 @@ def generate_excel_from_template_daily(df_clean, report_type="METAR", template_p
         
         ws = wb.create_sheet(title=sheet_name)
         
-        # Atur Lebar Kolom
         col_widths = [10.5, 8.5, 10.5, 9.8, 9.0, 7.1, 15.5, 10.0, 9.2, 12.0]
         for c_i, w_val in enumerate(col_widths, start=1):
             ws.column_dimensions[get_column_letter(c_i)].width = w_val
 
-        # Pengaturan Kertas
         ws.sheet_properties.pageSetUpPr.fitToPage = True
         ws.page_setup.paperSize = ws.PAPERSIZE_A4
         ws.page_setup.orientation = ws.ORIENTATION_PORTRAIT
@@ -233,7 +231,6 @@ def generate_excel_from_template_daily(df_clean, report_type="METAR", template_p
 
         current_row = 1
 
-        # LOOP PEMBUATAN BLOK HARIAN LENGKAP
         for d in range(1, num_days + 1):
             start_row = current_row
             
@@ -249,11 +246,11 @@ def generate_excel_from_template_daily(df_clean, report_type="METAR", template_p
             c3 = ws.cell(row=start_row+2, column=1, value="JL. ADI SUCIPTO NO.3")
             c3.font = font_kop_bold; c3.alignment = align_center; ws.row_dimensions[start_row+2].height = 18
 
-            # Masukkan Logo Lokal
+            # Logo BMKG dari berkas lokal
             if os.path.exists(logo_path):
                 try:
                     img = OpenpyxlImage(logo_path)
-                    img.width = 90; img.height = 90
+                    img.width = 80; img.height = 80
                     ws.add_image(img, f'A{start_row}')
                 except:
                     pass
@@ -307,7 +304,6 @@ def generate_excel_from_template_daily(df_clean, report_type="METAR", template_p
                 ws.row_dimensions[data_row_idx].height = 23.5 
                 data_row_idx += 1
             
-            # Page Break
             if d < num_days:
                 ws.row_breaks.append(Break(id=data_row_idx - 1))
             
@@ -321,7 +317,7 @@ def generate_excel_from_template_daily(df_clean, report_type="METAR", template_p
     return buffer
 
 # =================================================================================================
-# ===== EXCEL TEMPLATE INSERTER (SPECI: BULANAN BERSAMBUNG) ===
+# ===== EXCEL TEMPLATE INSERTER (SPECI: BULANAN BERSAMBUNG 1 KOP PENUH) ============================
 # =================================================================================================
 def generate_excel_from_template_speci(df_clean, report_type="SPECI", template_path="TEMPLATE METAR_3.xlsx", logo_path="logo_bmkg.png"):
     if not os.path.exists(template_path):
@@ -395,7 +391,7 @@ def generate_excel_from_template_speci(df_clean, report_type="SPECI", template_p
         if os.path.exists(logo_path):
             try:
                 img = OpenpyxlImage(logo_path)
-                img.width = 90; img.height = 90
+                img.width = 80; img.height = 80
                 ws.add_image(img, 'A1')
             except:
                 pass
@@ -418,7 +414,7 @@ def generate_excel_from_template_speci(df_clean, report_type="SPECI", template_p
                 ws.cell(row=r_sub, column=c_i).border = thin_border
         ws.row_dimensions[6].height = 15; ws.row_dimensions[7].height = 15
         
-        # MENGUNCI HEADER SAAT GANTI HALAMAN
+        # MENGUNCI HEADER TABEL SAAT DILANJUTKAN KE HALAMAN KEDUA
         ws.print_title_rows = '$6:$7'
 
         data_row_idx = 8
