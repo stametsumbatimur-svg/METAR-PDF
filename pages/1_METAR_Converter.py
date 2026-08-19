@@ -611,7 +611,7 @@ def generate_excel_from_template_thunderstorm(df_clean, template_path="TEMPLATE 
 
     # 3. Pengisian Data Matriks ke Sel B6:AF17 (Menggunakan safe_set_cell)
     for m in range(1, 13):
-        target_row = 5 + m  # Januari (m=1) -> Row 6
+        target_row = 6 + m  # Januari (m=1) -> Row 6
         for d in range(1, 32):
             target_col = 1 + d  # Tanggal 1 (d=1) -> Kolom B (2)
             val = matrix[m][d]
