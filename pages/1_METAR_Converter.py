@@ -30,6 +30,7 @@ BULAN_INDO = {
 }
 
 def safe_set_cell(ws, row, col, value):
+    """Mengatur nilai sel dengan aman, menghindari error jika sel ter-merge."""
     cell = ws.cell(row=row, column=col)
     if not isinstance(cell, MergedCell): 
         cell.value = value
@@ -556,9 +557,12 @@ def parse_wxrev(sandi_str):
     
     return [tgl, mmyygp, iiiii, att, app, auu, arr, rdrd1, rdrd2]
 
+# =========================================================
+# ===== THUNDERSTORM GENERATOR (TEMPLATE MURNI) ===========
+# =========================================================
 def generate_excel_from_template_thunderstorm(df_clean, template_path="TEMPLATE THUNDERSTORM.xlsx"):
     """
-    Mengisi matriks kejadian Thunderstorm ke TEMPLATE THUNDERSTORM.xlsx
+    Mengisi matriks kejadian Thunderstorm ke TEMPLATE THUNDERSTORM.xlsx murni.
     Aman dari kesalahan pengisian sel ter-merge (MergedCell).
     """
     buffer = io.BytesIO()
@@ -584,7 +588,7 @@ def generate_excel_from_template_thunderstorm(df_clean, template_path="TEMPLATE 
     align_center = Alignment(horizontal='center', vertical='center')
     font_data = Font(name='Arial', size=10)
 
-    # 1. Update Tahun di Cell A3
+    # 1. Update Tahun saja di Cell A3
     tahun = df_clean['datetime'].dt.year.iloc[0]
     safe_set_cell(ws, 3, 1, f"TAHUN : {tahun}")
 
@@ -612,7 +616,6 @@ def generate_excel_from_template_thunderstorm(df_clean, template_path="TEMPLATE 
             target_col = 1 + d  # Tanggal 1 (d=1) -> Kolom B (2)
             val = matrix[m][d]
             
-            # Gunakan penulisan aman untuk menghindari error MergedCell
             safe_set_cell(ws, target_row, target_col, val)
             
             cell = ws.cell(row=target_row, column=target_col)
@@ -1532,15 +1535,10 @@ elif menu == "WXREV Converter":
 # --- HALAMAN THUNDERSTORM EXPORTER ---
 elif menu == "Thunderstorm Exporter":
     st.title("⚡ Thunderstorm Data Exporter")
-    st.write("Ekstraksi data kejadian Kilat / Thunderstorm tahunan dari gabungan file METAR & SPECI ke dalam Template Excel.")
+    st.write("Ekstraksi data kejadian Kilat / Thunderstorm tahunan dari file METAR & SPECI langsung ke TEMPLATE THUNDERSTORM.xlsx.")
     
     DEFAULT_TEMPLATE_TS = "TEMPLATE THUNDERSTORM.xlsx"
     
-    with st.expander("⚙️ Pengaturan Header & Tanda Tangan (Khusus Ekspor PDF)"):
-        st_nama = st.text_input("Nama Stasiun", "STASIUN METEOROLOGI UMBU MEHANG KUNDA")
-        kp_nama = st.text_input("Nama Kepala Stasiun", "CARLES ALEXANDER TARI, S.TP")
-        kp_nip = st.text_input("NIP Kepala Stasiun (Opsional)", "")
-        
     uploaded_files = st.file_uploader("Upload File CSV (Bisa Upload Multiple METAR/SPECI)", type=["csv"], accept_multiple_files=True)
     
     if uploaded_files:
@@ -1552,7 +1550,7 @@ elif menu == "Thunderstorm Exporter":
                     for idx, row in df.iterrows():
                         res = parse_metar_speci(row['sandi'])
                         if res:
-                            station = row['station_name'] if 'station_name' in df.columns else st_nama
+                            station = row['station_name'] if 'station_name' in df.columns else "STASIUN METEOROLOGI"
                             all_rows.append(res + [row['data_timestamp'], station])
             except Exception as e:
                 st.error(f"Gagal membaca file {file.name}: {e}")
@@ -1564,31 +1562,64 @@ elif menu == "Thunderstorm Exporter":
             df_clean['datetime'] = pd.to_datetime(df_clean['raw_timestamp'])
             df_clean = df_clean.sort_values(by='datetime').reset_index(drop=True)
             
-            # PDF Generator
-            pdf_data = generate_pdf_bytes_thunderstorm(df_clean, st_nama, kp_nama, kp_nip)
-            
-            # Excel Generator dari Template (Tanpa Otomatisasi TTD/Nama)
+            # Excel Generator murni dari Template
             excel_data = generate_excel_from_template_thunderstorm(df_clean, template_path=DEFAULT_TEMPLATE_TS)
                 
             tahun = df_clean['datetime'].dt.year.iloc[0]
             st.success(f"Berhasil memproses data Thunderstorm Tahun {tahun}!")
             st.write("---")
             
-            col_pdf, col_xlsx = st.columns(2)
-            with col_pdf: 
-                st.download_button(
-                    label="📥 Download PDF Thunderstorm", 
-                    data=pdf_data, 
-                    file_name=f"THUNDERSTORM_{tahun}.pdf", 
-                    mime="application/pdf"
-                )
-            with col_xlsx: 
-                st.download_button(
-                    label="📊 Download Excel Thunderstorm", 
-                    data=excel_data, 
-                    file_name=f"THUNDERSTORM_{tahun}.xlsx", 
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+            st.download_button(
+                label="📊 Download Excel Thunderstorm", 
+                data=excel_data, 
+                file_name=f"THUNDERSTORM_{tahun}.xlsx", 
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+# --- HALAMAN FORM PERAWANAN EXPORTER ---
+elif menu == "Form Perawanan Exporter":
+    st.title("☁️ Form Perawanan Exporter")
+    st.write("Ekstraksi data Ikhtisar Frekuensi Perawanan bulanan dari file METAR per jam.")
+    with st.expander("⚙️ Pengaturan Header, Form & Tanda Tangan PDF"):
+        st_nama = st.text_input("Nama Stasiun", "STASIUN METEOROLOGI UMBU MEHANG KUNDA", key="pwn_st")
+        form_code = st.text_input("Kode Form (Pojok Kiri Bawah)", "Klim / PWN/WPU-2001")
+        kp_nama = st.text_input("Nama Kepala Stasiun", "CARLES ALEXANDER TARI, S.TP", key="pwn_kp")
+        kp_nip = st.text_input("NIP Kepala Stasiun", "197712082001121001", key="pwn_nip")
+    uploaded_files = st.file_uploader("Upload File CSV METAR", type=["csv"], accept_multiple_files=True, key="pwn_uploader")
+    if uploaded_files:
+        all_rows = []
+        for file in uploaded_files:
+            try:
+                df = pd.read_csv(file)
+                if 'sandi' in df.columns and 'data_timestamp' in df.columns:
+                    for idx, row in df.iterrows():
+                        res = parse_metar_speci(row['sandi'])
+                        if res and res[0] == 'METAR':
+                            station = row['station_name'] if 'station_name' in df.columns else st_nama
+                            msg_id = row['id'] if 'id' in df.columns else idx
+                            all_rows.append(res + [row['data_timestamp'], station, msg_id])
+            except Exception as e: st.error(f"Gagal membaca file {file.name}: {e}")
+        if all_rows:
+            columns = ['TYPE', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK', 'is_cor', 'cc_type', 'raw_timestamp', 'station_name', 'msg_id']
+            df_clean = pd.DataFrame(all_rows, columns=columns)
+            df_clean['raw_timestamp'] = df_clean['raw_timestamp'].str.replace(" +0000 UTC", "", regex=False)
+            df_clean['datetime'] = pd.to_datetime(df_clean['raw_timestamp'])
+            df_clean = df_clean[df_clean['datetime'].dt.minute == 0]
+            df_clean['priority_score'] = df_clean.apply(calculate_priority, axis=1)
+            df_clean = df_clean.sort_values(by=['datetime', 'priority_score', 'msg_id'])
+            df_clean = df_clean.drop_duplicates(subset=['datetime'], keep='last')
+            df_clean = df_clean.sort_values(by='datetime').reset_index(drop=True)
+            if df_clean.empty: st.warning("Tidak ditemukan data METAR dengan menit :00 di dalam file ini.")
+            else:
+                pdf_data = generate_pdf_bytes_perawanan(df_clean, st_nama, kp_nama, kp_nip, form_code)
+                excel_data = generate_excel_bytes_perawanan(df_clean, st_nama)
+                months_count = len(df_clean.groupby([df_clean['datetime'].dt.year, df_clean['datetime'].dt.month]))
+                dt_min = df_clean['datetime'].min(); dt_max = df_clean['datetime'].max()
+                st.success(f"Berhasil memproses Data Perawanan untuk {months_count} bulan ({dt_min.strftime('%b %Y')} - {dt_max.strftime('%b %Y')})!")
+                st.write("---")
+                col_pdf, col_xlsx = st.columns(2)
+                with col_pdf: st.download_button(label="📥 Download PDF Perawanan", data=pdf_data, file_name=f"PERAWANAN_{dt_min.strftime('%Y%m')}_{dt_max.strftime('%Y%m')}.pdf", mime="application/pdf")
+                with col_xlsx: st.download_button(label="📊 Download Excel Perawanan", data=excel_data, file_name=f"PERAWANAN_{dt_min.strftime('%Y%m')}_{dt_max.strftime('%Y%m')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # --- HALAMAN PIBAL / RADIOSONDE ---
 elif menu == "Form Komponen Angin, UWI, dan UWII":
