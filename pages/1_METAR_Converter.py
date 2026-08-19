@@ -128,6 +128,9 @@ def get_cloud_category(cloud_str, vis_str):
     else:
         return 'CERAH'
 
+# ==========================================
+# ===== PDF GENERATION (DENGAN AUTO-WRAP) ===
+# ==========================================
 def generate_pdf_bytes_metar(df_clean, logo_path):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=75, topMargin=25, bottomMargin=25)
@@ -136,6 +139,10 @@ def generate_pdf_bytes_metar(df_clean, logo_path):
     styles = getSampleStyleSheet()
     header_text_style = ParagraphStyle('HeaderCenterText', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=11, leading=15, alignment=1)
     
+    # Style sel tabel dengan Auto-Wrap untuk mencegah teks bertumpuk
+    cell_style_center = ParagraphStyle('CellCenter', parent=styles['Normal'], fontName='Helvetica', fontSize=7.5, leading=9, alignment=1)
+    cell_style_bold = ParagraphStyle('CellHeaderCenter', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=8, leading=10, alignment=1)
+
     nama_stasiun = df_clean['station_name'].iloc[0].upper() if 'station_name' in df_clean.columns else "STASIUN METEOROLOGI"
     grouped = df_clean.groupby('date_group')
     
@@ -170,25 +177,41 @@ def generate_pdf_bytes_metar(df_clean, logo_path):
         story.append(header_table)
         story.append(Spacer(1, 10))
         
-        headers = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK']
-        table_data = [headers]
+        headers_raw = ['METAR', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK']
+        headers_p = [Paragraph(h, cell_style_bold) for h in headers_raw]
+        table_data = [headers_p]
         
         base_table_style = [
             ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey), ('ALIGN', (0, 0), (-1, -1), 'CENTER'), ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.black), ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5), ('TOPPADDING', (0, 0), (-1, -1), 2.5),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'), ('FONTSIZE', (0, 0), (-1, 0), 8), ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'), ('FONTSIZE', (0, 1), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.black), ('BOTTOMPADDING', (0, 0), (-1, -1), 2), ('TOPPADDING', (0, 0), (-1, -1), 2),
+            ('LEFTPADDING', (0, 0), (-1, -1), 1), ('RIGHTPADDING', (0, 0), (-1, -1), 1),
         ]
         
         for idx, row in group.iterrows():
             current_row_idx = len(table_data)
-            if row['VIS'] == 'CAVOK':
-                row_data = [str(row['TYPE']), str(row['LOC']), str(row['TIME']), str(row['WIND']), 'CAVOK', '', '', str(row['T/DP']), str(row['QNH']), str(row['RMK'])]
+            
+            p_type = Paragraph(str(row['TYPE']), cell_style_center)
+            p_loc = Paragraph(str(row['LOC']), cell_style_center)
+            p_time = Paragraph(str(row['TIME']), cell_style_center)
+            p_wind = Paragraph(str(row['WIND']), cell_style_center)
+            p_tdp = Paragraph(str(row['T/DP']), cell_style_center)
+            p_qnh = Paragraph(str(row['QNH']), cell_style_center)
+            p_rmk = Paragraph(str(row['RMK']), cell_style_center)
+
+            if str(row['VIS']) == 'CAVOK':
+                p_vis = Paragraph('CAVOK', cell_style_center)
+                row_data = [p_type, p_loc, p_time, p_wind, p_vis, Paragraph('', cell_style_center), Paragraph('', cell_style_center), p_tdp, p_qnh, p_rmk]
                 base_table_style.append(('SPAN', (4, current_row_idx), (6, current_row_idx)))
             else:
-                row_data = [str(row['TYPE']), str(row['LOC']), str(row['TIME']), str(row['WIND']), str(row['VIS']), str(row['WX']), str(row['CLOUD']), str(row['T/DP']), str(row['QNH']), str(row['RMK'])]
+                p_vis = Paragraph(str(row['VIS']), cell_style_center)
+                p_wx = Paragraph(str(row['WX']), cell_style_center)
+                p_cloud = Paragraph(str(row['CLOUD']), cell_style_center) # Membungkus teks awan dalam Paragraph
+                row_data = [p_type, p_loc, p_time, p_wind, p_vis, p_wx, p_cloud, p_tdp, p_qnh, p_rmk]
+                
             table_data.append(row_data)
             
-        col_widths = [40, 35, 50, 65, 35, 35, 90, 40, 45, 55] 
+        # Lebar Kolom Disesuaikan Agar Proporsional
+        col_widths = [38, 32, 45, 55, 30, 32, 120, 42, 42, 44] 
         metar_table = Table(table_data, colWidths=col_widths)
         metar_table.setStyle(TableStyle(base_table_style))
         story.append(metar_table)
@@ -205,7 +228,9 @@ def generate_pdf_bytes_speci(df_clean, logo_path):
     styles = getSampleStyleSheet()
     header_text_style = ParagraphStyle('HeaderCenterText', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=11, leading=15, alignment=1)
     sub_header_style = ParagraphStyle('SubHeader', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=10, leading=14, spaceAfter=5, spaceBefore=5)
-    
+    cell_style_center = ParagraphStyle('CellCenter', parent=styles['Normal'], fontName='Helvetica', fontSize=7.5, leading=9, alignment=1)
+    cell_style_bold = ParagraphStyle('CellHeaderCenter', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=8, leading=10, alignment=1)
+
     nama_stasiun = df_clean['station_name'].iloc[0].upper() if 'station_name' in df_clean.columns else "STASIUN METEOROLOGI"
     
     df_clean['year'] = df_clean['datetime'].dt.year
@@ -250,25 +275,40 @@ def generate_pdf_bytes_speci(df_clean, logo_path):
             group_story = []
             group_story.append(Paragraph(f"<b>Tanggal: {tanggal_format}</b>", sub_header_style))
             
-            headers = ['SPECI', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK']
-            table_data = [headers]
+            headers_raw = ['SPECI', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK']
+            headers_p = [Paragraph(h, cell_style_bold) for h in headers_raw]
+            table_data = [headers_p]
             
             base_table_style = [
                 ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey), ('ALIGN', (0, 0), (-1, -1), 'CENTER'), ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.black), ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5), ('TOPPADDING', (0, 0), (-1, -1), 2.5),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'), ('FONTSIZE', (0, 0), (-1, 0), 8), ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'), ('FONTSIZE', (0, 1), (-1, -1), 8),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.black), ('BOTTOMPADDING', (0, 0), (-1, -1), 2), ('TOPPADDING', (0, 0), (-1, -1), 2),
+                ('LEFTPADDING', (0, 0), (-1, -1), 1), ('RIGHTPADDING', (0, 0), (-1, -1), 1),
             ]
             
             for idx, row in date_group.iterrows():
                 current_row_idx = len(table_data)
-                if row['VIS'] == 'CAVOK':
-                    row_data = [str(row['TYPE']), str(row['LOC']), str(row['TIME']), str(row['WIND']), 'CAVOK', '', '', str(row['T/DP']), str(row['QNH']), str(row['RMK'])]
+                
+                p_type = Paragraph(str(row['TYPE']), cell_style_center)
+                p_loc = Paragraph(str(row['LOC']), cell_style_center)
+                p_time = Paragraph(str(row['TIME']), cell_style_center)
+                p_wind = Paragraph(str(row['WIND']), cell_style_center)
+                p_tdp = Paragraph(str(row['T/DP']), cell_style_center)
+                p_qnh = Paragraph(str(row['QNH']), cell_style_center)
+                p_rmk = Paragraph(str(row['RMK']), cell_style_center)
+
+                if str(row['VIS']) == 'CAVOK':
+                    p_vis = Paragraph('CAVOK', cell_style_center)
+                    row_data = [p_type, p_loc, p_time, p_wind, p_vis, Paragraph('', cell_style_center), Paragraph('', cell_style_center), p_tdp, p_qnh, p_rmk]
                     base_table_style.append(('SPAN', (4, current_row_idx), (6, current_row_idx)))
                 else:
-                    row_data = [str(row['TYPE']), str(row['LOC']), str(row['TIME']), str(row['WIND']), str(row['VIS']), str(row['WX']), str(row['CLOUD']), str(row['T/DP']), str(row['QNH']), str(row['RMK'])]
+                    p_vis = Paragraph(str(row['VIS']), cell_style_center)
+                    p_wx = Paragraph(str(row['WX']), cell_style_center)
+                    p_cloud = Paragraph(str(row['CLOUD']), cell_style_center)
+                    row_data = [p_type, p_loc, p_time, p_wind, p_vis, p_wx, p_cloud, p_tdp, p_qnh, p_rmk]
+                    
                 table_data.append(row_data)
                 
-            col_widths = [40, 35, 50, 65, 35, 35, 90, 40, 45, 55] 
+            col_widths = [38, 32, 45, 55, 30, 32, 120, 42, 42, 44] 
             speci_table = Table(table_data, colWidths=col_widths)
             speci_table.setStyle(TableStyle(base_table_style))
             
@@ -282,10 +322,6 @@ def generate_pdf_bytes_speci(df_clean, logo_path):
     return buffer
 
 def generate_excel_bytes_metar_speci(df_clean, report_type="METAR"):
-    """
-    Fungsi Fallback (Cadangan) jika Template Excel tidak ditemukan.
-    Akan meng-export data ke satu sheet standar dengan warna biru (Default Style).
-    """
     buffer = io.BytesIO()
     headers = ['TYPE', 'LOC', 'TIME', 'WIND', 'VIS', 'WX', 'CLOUD', 'T/DP', 'QNH', 'RMK', 'datetime']
     df_export = df_clean[headers].copy()
@@ -317,13 +353,10 @@ def generate_excel_bytes_metar_speci(df_clean, report_type="METAR"):
     buffer.seek(0)
     return buffer
 
-# ==========================================
-# ===== METAR TEMPLATE INSERTER FUNCTION ===
-# ==========================================
+# ========================================================
+# ===== EXCEL TEMPLATE INSERTER (DENGAN BORDER UTUH) ====
+# ========================================================
 def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3.xlsx"):
-    """
-    Fungsi untuk menyuntikkan data METAR ke dalam File Excel Berbasis Template.
-    """
     if not os.path.exists(template_path):
         for alt in ["TEMPLATE METAR.xlsx", "TEMPLATE METAR_2.xlsx", "TEMPLATE METAR_3.xlsx"]:
             if os.path.exists(alt):
@@ -340,6 +373,12 @@ def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3
     else:
         ws_template = wb.active
 
+    # Opsi Style Border dan Alignment Otomatis untuk Seluruh Sel
+    thin_side = Side(style='thin', color='000000')
+    thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+    align_center = Alignment(horizontal='center', vertical='center')
+    font_data = Font(name='Arial', size=9)
+
     df_clean['year'] = df_clean['datetime'].dt.year
     df_clean['month'] = df_clean['datetime'].dt.month
     df_clean['day'] = df_clean['datetime'].dt.day
@@ -351,19 +390,17 @@ def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3
         nama_bulan = BULAN_INDO[month]
         sheet_name = f"{nama_bulan}"
         
-        # Duplikasi template ke sheet bulanan
         ws = wb.copy_worksheet(ws_template)
         ws.title = sheet_name
         
-        # Update nilai sel Tanggal (G4)
         first_date_dt = datetime(year, month, 1)
         ws['G4'].value = first_date_dt
         
-        # Penulisan Data
+        # Penulisan Data METAR
         for _, row in month_group.iterrows():
             d = row['day']
             h = row['hour']
-            target_row = 8 + (d - 1) * 24 + h # Dimulai dari Baris 8 (Sesuai Template)
+            target_row = 8 + (d - 1) * 24 + h # Dimulai dari baris 8
             
             metar_type = str(row['TYPE']) if pd.notna(row['TYPE']) else 'METAR'
             loc = str(row['LOC']) if pd.notna(row['LOC']) else 'WATU'
@@ -380,21 +417,21 @@ def generate_excel_from_template_metar(df_clean, template_path="TEMPLATE METAR_3
                 wx = ''
                 cloud = ''
                 
-            ws.cell(row=target_row, column=1, value=metar_type)
-            ws.cell(row=target_row, column=2, value=loc)
-            ws.cell(row=target_row, column=3, value=time_str)
-            ws.cell(row=target_row, column=4, value=wind)
-            ws.cell(row=target_row, column=5, value=int(vis) if vis.isdigit() else vis)
-            ws.cell(row=target_row, column=6, value=wx)
-            ws.cell(row=target_row, column=7, value=cloud)
-            ws.cell(row=target_row, column=8, value=t_dp)
-            ws.cell(row=target_row, column=9, value=qnh)
-            ws.cell(row=target_row, column=10, value=rmk)
+            vals = [metar_type, loc, time_str, wind, int(vis) if vis.isdigit() else vis, wx, cloud, t_dp, qnh, rmk]
+            for col_idx, val in enumerate(vals, start=1):
+                cell = ws.cell(row=target_row, column=col_idx, value=val)
+
+        # Aplikasi Border dan Alignment Konsisten untuk Seluruh Sel dari Baris 8 ke Bawah
+        max_row_sheet = ws.max_row
+        for r in range(8, max_row_sheet + 1):
+            for c in range(1, 11):
+                cell = ws.cell(row=r, column=c)
+                cell.border = thin_border
+                cell.alignment = align_center
+                cell.font = font_data
             
-    # Hapus sheet template master agar Excel tampak bersih
     wb.remove(ws_template)
     
-    # Save ke buffer
     wb.save(buffer)
     buffer.seek(0)
     return buffer
