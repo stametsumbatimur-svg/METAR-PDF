@@ -335,11 +335,10 @@ class EnginePerapihData:
 st.title("🌤️ Pengolah Data ALOPTAMA")
 st.caption("Aplikasi Rekapitulasikan Data AWOS & AWS Strengthening - By Luqmanul Hakim, S.Tr")
 
-tab_awos, tab_fdb, tab_aws, tab_info = st.tabs([
+tab_awos, tab_fdb, tab_aws = st.tabs([
     "1. 📊 Panel AWOS", 
     "2. ⚡ Ekstrak FDB ke CSV", 
-    "3. 🛰️ Panel AWS Strengthening", 
-    "4. ℹ️ Refresh Sistem"
+    "3. 🛰️ Panel AWS Strengthening"
 ])
 
 # --- TAB 1: AWOS ---
@@ -353,17 +352,15 @@ with tab_awos:
         'Precip 1Hr (mm) 33': 'Curah Hujan'
     }
     
-    excel_lama_awos = st.file_uploader(" (Opsional) Gabungkan dengan File Excel AWOS Lama", type=['xlsx'], key="awos_old")
-    files_awos = st.file_uploader("Upload File Mentah AWOS Tambahan / Baru", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True, key="awos_new")
+    # DARI SINI: Hanya upload file mentah baru
+    files_awos = st.file_uploader("Upload File Mentah AWOS", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True, key="awos_new")
     
     if st.button("Proses Data AWOS 🚀", key="btn_awos"):
-        if not files_awos and not excel_lama_awos:
+        if not files_awos:
             st.error("Silakan upload minimal satu file AWOS!")
         else:
             with st.spinner("Memproses, Menyelaraskan Waktu, & Melakukan Quality Control AWOS..."):
                 list_df = []
-                if excel_lama_awos:
-                    list_df.append(pd.read_excel(excel_lama_awos, sheet_name="Data_AWOS_Clean"))
                 
                 for fp in files_awos:
                     if fp.name.endswith(('.xlsx', '.xls')):
@@ -437,17 +434,14 @@ with tab_aws:
     }
     kolom_aws_resmi = ['Date', 'Time', 'S', 'DD', 'FF', 'DM10', 'FM10', 'DD2', 'FF2', 'DVN', 'DVX', 'FVN', 'FVX', 'RR', 'RH', 'TSV', 'DP', 'T', 'GLOR', 'GLORP', 'INSD', 'STAP', 'MSLP', 'GNDT']
     
-    excel_lama_aws = st.file_uploader(" (Opsional) Gabungkan dengan File Excel AWS Lama", type=['xlsx'], key="aws_old")
     files_aws = st.file_uploader("Upload File Mentah AWS (Format Text/Excel/CSV/FDB)", type=['xlsx', 'xls', 'csv', 'txt', 'fdb'], accept_multiple_files=True, key="aws_new")
     
     if st.button("Proses Data AWS 🚀", key="btn_aws"):
-        if not files_aws and not excel_lama_aws:
+        if not files_aws:
             st.error("Silakan upload minimal satu file AWS!")
         else:
             with st.spinner("Memproses & Merekonstruksi Data AWS..."):
                 list_df = []
-                if excel_lama_aws:
-                    list_df.append(pd.read_excel(excel_lama_aws, sheet_name="Data_AWS_Clean"))
                 
                 for fp in files_aws:
                     ext = fp.name.lower()
@@ -480,10 +474,3 @@ with tab_aws:
                     file_name="AWS_Gabungan_Clean.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
-
-# --- TAB 4: INFO SISTEM ---
-with tab_info:
-    
-    if st.button("♻️ Bersihkan Memori Server (RAM)"):
-        freed = gc.collect()
-        st.info(f"RAM berhasil dibersihkan! ({freed} objek dibuang).")
