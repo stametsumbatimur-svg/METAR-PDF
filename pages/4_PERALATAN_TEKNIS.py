@@ -1,7 +1,4 @@
 import os
-import sys
-import struct
-import gc
 import io
 import tempfile
 import numpy as np
@@ -19,34 +16,31 @@ st.set_page_config(
 
 # --- ENGINE OLAH DATA & HELPER ---
 class EnginePerapihData:
+    
     @staticmethod
     def smart_parse_datetime(date_series, time_series):
         combined = date_series.astype(str).str.strip() + ' ' + time_series.astype(str).str.strip()
         return pd.to_datetime(combined, format='mixed', dayfirst=True, errors='coerce')
 
     @classmethod
+    @st.cache_data(show_spinner=False)
     def normalize_dataframe(cls, df):
-        if df is None or df.empty:
-            return df
-        if 'Date' not in df.columns or 'Time' not in df.columns:
+        if df is None or df.empty or 'Date' not in df.columns or 'Time' not in df.columns:
             return df
 
-        valid_mask = (
-            df['Date'].notna() & 
-            df['Date'].astype(str).str.strip().ne('') & 
-            (df['Date'].astype(str).str.strip().str.lower() != 'nan')
-        )
+        # Filter tanggal valid
+        date_str = df['Date'].astype(str).str.strip()
+        valid_mask = df['Date'].notna() & date_str.ne('') & date_str.str.lower().ne('nan')
         df_clean = df[valid_mask].copy()
 
+        # Parse & urutkan Waktu
         df_clean['datetime_temp'] = cls.smart_parse_datetime(df_clean['Date'], df_clean['Time'])
         df_clean.dropna(subset=['datetime_temp'], inplace=True)
-
-        # Deduplikasi & Urutkan Berdasarkan Waktu
         df_clean.drop_duplicates(subset=['datetime_temp'], inplace=True)
         df_clean.set_index('datetime_temp', inplace=True)
         df_clean.sort_index(inplace=True)
 
-        # Resample Kontinu 1-Menit (Time Series Regularity)
+        # Resample Kontinu 1-Menit
         if not df_clean.empty:
             df_clean = df_clean.resample('1min').asfreq()
         
@@ -54,31 +48,26 @@ class EnginePerapihData:
         df_clean['Date'] = df_clean['datetime_temp'].dt.strftime('%Y-%m-%d')
         df_clean['Time'] = df_clean['datetime_temp'].dt.strftime('%H:%M:00')
 
-        # Type Casting Numerik
-        cols_to_exclude = ['Date', 'Time', 'datetime_temp', 'Date_Time_Raw', 'S']
-        for col in df_clean.columns:
-            if col not in cols_to_exclude:
-                df_clean[col] = df_clean[col].astype(str).replace(r'^/+$', np.nan, regex=True)
-                df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
+        # Type Casting Numerik Tervektorisasi (Tanpa Regex Lambat)
+        cols_to_exclude = {'Date', 'Time', 'datetime_temp', 'Date_Time_Raw', 'S'}
+        target_cols = [c for c in df_clean.columns if c not in cols_to_exclude]
+        for col in target_cols:
+            df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
 
-        # Quality Control (QC) Range Check Fisik
-        for col in ['T', 'Air Tmp (C) 33']:
-            if col in df_clean.columns:
-                df_clean.loc[(df_clean[col] < -50) | (df_clean[col] > 60), col] = np.nan
-        for col in ['RH', 'RH (%) 33']:
-            if col in df_clean.columns:
-                df_clean.loc[(df_clean[col] < 0) | (df_clean[col] > 100), col] = np.nan
-        for col in ['DD', 'Mag WD (deg) 33']:
-            if col in df_clean.columns:
-                df_clean.loc[(df_clean[col] < 0) | (df_clean[col] > 360), col] = np.nan
-        for col in ['FF', 'WS (kt) 33']:
-            if col in df_clean.columns:
-                df_clean.loc[(df_clean[col] < 0) | (df_clean[col] > 150), col] = np.nan
-        for p_col in ['STAP', 'MSLP', 'QFE (hPa) 33', 'QNH (hPa) 33']:
-            if p_col in df_clean.columns:
-                df_clean.loc[(df_clean[p_col] < 600) | (df_clean[p_col] > 1150), p_col] = np.nan
+        # Quality Control (QC) Range Check Fisik Tervektorisasi
+        qc_limits = {
+            ('T', 'Air Tmp (C) 33'): (-50, 60),
+            ('RH', 'RH (%) 33'): (0, 100),
+            ('DD', 'Mag WD (deg) 33'): (0, 360),
+            ('FF', 'WS (kt) 33'): (0, 150),
+            ('STAP', 'MSLP', 'QFE (hPa) 33', 'QNH (hPa) 33'): (600, 1150)
+        }
+        for cols, (vmin, vmax) in qc_limits.items():
+            for col in cols:
+                if col in df_clean.columns:
+                    df_clean.loc[(df_clean[col] < vmin) | (df_clean[col] > vmax), col] = np.nan
 
-        # Kalkulasi Titik Embun (DP) Otomatis
+        # Kalkulasi Titik Embun (Dew Point / $DP$)
         t_col = 'T' if 'T' in df_clean.columns else ('Air Tmp (C) 33' if 'Air Tmp (C) 33' in df_clean.columns else None)
         rh_col = 'RH' if 'RH' in df_clean.columns else ('RH (%) 33' if 'RH (%) 33' in df_clean.columns else None)
         dp_col = 'DP' if 'DP' in df_clean.columns else ('Dew Pt (C) 33' if 'Dew Pt (C) 33' in df_clean.columns else 'DP')
@@ -86,9 +75,8 @@ class EnginePerapihData:
         if t_col and rh_col:
             valid_trh = df_clean[t_col].notna() & df_clean[rh_col].notna()
             a, b = 17.27, 237.7
-            alpha = ((a * df_clean[t_col]) / (b + df_clean[t_col])) + np.log(df_clean[rh_col] / 100.0)
-            dp_calc = (b * alpha) / (a - alpha)
-            dp_calc = dp_calc.round(1)
+            alpha = ((a * df_clean[t_col]) / (b + df_clean[t_col])) + np.log(np.maximum(df_clean[rh_col], 1e-5) / 100.0)
+            dp_calc = ((b * alpha) / (a - alpha)).round(1)
             
             if dp_col not in df_clean.columns:
                 df_clean[dp_col] = np.nan
@@ -101,63 +89,67 @@ class EnginePerapihData:
 
     @staticmethod
     def parse_text_lines(lines, kolom_aws_resmi):
-        if not lines: return []
+        if not lines: 
+            return []
+        
         data_rows = []
         start_idx = 0
         first_line = lines[0].strip()
         tokens_first = first_line.split()
+        
         if tokens_first:
             t0 = tokens_first[0].lower()
             if 'date' in t0 or 'tgl' in t0 or 'tanggal' in t0 or 'waktu' in t0 or not any(c.isdigit() for c in t0):
                 start_idx = 1
 
+        needed_payload_len = len(kolom_aws_resmi) - 2  # Total kolom minus Date dan Time
+        
         for baris in lines[start_idx:]:
             tokens = baris.strip().split()
-            if not tokens: continue
+            if not tokens: 
+                continue
             
             if len(tokens) > 1 and ':' in tokens[1]:
                 date_val, time_val = tokens[0], tokens[1]
-                remaining_tokens = tokens[2:]
+                remaining = tokens[2:]
             else:
                 date_val, time_val = tokens[0], '00:00:00'
-                remaining_tokens = tokens[1:]
+                remaining = tokens[1:]
             
-            while len(remaining_tokens) < 22:
-                remaining_tokens.append('')
-            data_rows.append([date_val, time_val] + remaining_tokens[:22])
+            # Batch padding super cepat (O(1)) menggantikan while-loop
+            pad_len = needed_payload_len - len(remaining)
+            if pad_len > 0:
+                remaining.extend([''] * pad_len)
+                
+            data_rows.append([date_val, time_val] + remaining[:needed_payload_len])
             
         return data_rows
 
-    @staticmethod
-    def buat_rangkuman_per_sensor(df, sensor_labels):
+    @classmethod
+    @st.cache_data(show_spinner=False)
+    def buat_rangkuman_per_sensor(cls, df, sensor_labels):
         TOTAL_HARUSNYA_PER_HARI = 1440
-        list_sensor = list(sensor_labels.keys())
+        valid_sensors = [s for s in sensor_labels.keys() if s in df.columns]
         
         valid_df = df[df['Date'].notna() & (df['Date'] != '')].copy()
         if valid_df.empty:
-            cols = ['Date', 'Total Menit Log'] + [f'{label} (%)' for label in sensor_labels.values()] + ['PERSENTASE TOTAL KESELURUHAN (%)']
+            cols = ['Date', 'Total Menit Log'] + [f'{sensor_labels[s]} (%)' for s in valid_sensors] + ['PERSENTASE TOTAL KESELURUHAN (%)']
             return pd.DataFrame(columns=cols)
 
-        grouped = valid_df.groupby('Date', sort=False)
-        summary_data = []
+        # Matriks Agregasi Tervektorisasi (Tanpa Iterasi Baris)
+        counts = valid_df.groupby('Date', sort=False).size().rename('Total Menit Log')
+        valid_counts = valid_df.groupby('Date', sort=False)[valid_sensors].count()
         
-        for date, group in grouped:
-            row_summary = {'Date': date, 'Total Menit Log': int(len(group))}
-            total_valid_all_sensors = 0
-            total_possible_all_sensors = len(list_sensor) * TOTAL_HARUSNYA_PER_HARI
-            
-            for sensor in list_sensor:
-                label = sensor_labels[sensor]
-                valid_count = int(group[sensor].notna().sum()) if sensor in group.columns else 0
-                percentage = min((valid_count / TOTAL_HARUSNYA_PER_HARI) * 100, 100.0)
-                row_summary[f'{label} (%)'] = float(round(percentage, 2))
-                total_valid_all_sensors += valid_count
-            
-            overall_percentage = min((total_valid_all_sensors / total_possible_all_sensors) * 100, 100.0)
-            row_summary['PERSENTASE TOTAL KESELURUHAN (%)'] = float(round(overall_percentage, 2))
-            summary_data.append(row_summary)
-            
-        summary_df = pd.DataFrame(summary_data)
+        pct_df = (valid_counts / TOTAL_HARUSNYA_PER_HARI * 100).clip(upper=100.0).round(2)
+        pct_df.rename(columns={s: f"{sensor_labels[s]} (%)" for s in valid_sensors}, inplace=True)
+        
+        total_possible = len(sensor_labels) * TOTAL_HARUSNYA_PER_HARI
+        overall_pct = (valid_counts.sum(axis=1) / total_possible * 100).clip(upper=100.0).round(2)
+        
+        summary_df = pd.concat([counts, pct_df], axis=1)
+        summary_df['PERSENTASE TOTAL KESELURUHAN (%)'] = overall_pct
+        summary_df.reset_index(inplace=True)
+
         summary_df['date_temp'] = pd.to_datetime(summary_df['Date'], errors='coerce')
         summary_df.sort_values('date_temp', inplace=True)
         summary_df.drop(columns=['date_temp'], inplace=True, errors='ignore')
@@ -167,16 +159,12 @@ class EnginePerapihData:
                 'Date': 'RATA-RATA & TOTAL BULANAN', 
                 'Total Menit Log': int(summary_df['Total Menit Log'].sum())
             }
-            for col in summary_df.columns:
-                if col not in ['Date', 'Total Menit Log']:
-                    avg_row[col] = float(round(summary_df[col].mean(), 2))
+            num_cols = summary_df.columns.difference(['Date', 'Total Menit Log'])
+            avg_row.update(summary_df[num_cols].mean().round(2).to_dict())
             summary_df = pd.concat([summary_df, pd.DataFrame([avg_row])], ignore_index=True)
             
         return summary_df
 
-    # ==============================================================
-    # PENAMBAHAN FITUR: FORMATTING LENGKAP EXCEL SAMA DENGAN DESKTOP
-    # ==============================================================
     @staticmethod
     def simpan_ke_excel_bytes(df_data, df_summary, data_sheet_name):
         output = io.BytesIO()
@@ -184,6 +172,7 @@ class EnginePerapihData:
             df_data.to_excel(writer, index=False, sheet_name=data_sheet_name)
             df_summary.to_excel(writer, index=False, sheet_name="Rangkuman_Ketersediaan")
             
+            # Styling Objects
             font_header = Font(name='Arial', size=11, bold=True, color='FFFFFF')
             fill_header = PatternFill(start_color='1F4E78', end_color='1F4E78', fill_type='solid')
             align_header = Alignment(horizontal='center', vertical='center', wrap_text=True)
@@ -200,40 +189,33 @@ class EnginePerapihData:
             border_thin = Border(left=side_thin, right=side_thin, top=side_thin, bottom=side_thin)
             border_total = Border(left=side_thin, right=side_thin, top=side_thin, bottom=Side(style='double', color='000000'))
 
-            # --- 1. FORMATTING SHEET DATA UTAMA ---
+            # --- 1. FORMAT SHEET DATA UTAMA ---
             ws_data = writer.sheets[data_sheet_name]
             ws_data.freeze_panes = 'A2'
             ws_data.auto_filter.ref = ws_data.dimensions
             ws_data.row_dimensions[1].height = 28
             
-            # Format Header
             for cell in ws_data[1]:
-                cell.font = font_header
-                cell.fill = fill_header
-                cell.alignment = align_header
-                cell.border = border_thin
+                cell.font, cell.fill, cell.alignment, cell.border = font_header, fill_header, align_header, border_thin
 
-            # Format Sel Data & Zebra Striping
             max_row_data = ws_data.max_row
             max_col_data = ws_data.max_column
             for r_idx, row in enumerate(ws_data.iter_rows(min_row=2, max_row=max_row_data, max_col=max_col_data), start=2):
                 ws_data.row_dimensions[r_idx].height = 20
-                for c_idx, cell in enumerate(row, start=1):
+                is_even = (r_idx % 2 == 0)
+                for cell in row:
                     cell.font = font_data
                     cell.border = border_thin
-                    if r_idx % 2 == 0:
-                        cell.fill = fill_zebra
+                    if is_even: cell.fill = fill_zebra
                     cell.alignment = align_center
 
-            # Hitung Otomatis Lebar Kolom (Auto-Fit Column Width)
-            df_sample = df_data.head(500)
+            # Auto-Fit Lebar Kolom Cepat
             for idx, col in enumerate(df_data.columns, 1):
-                max_val_len = df_sample[col].fillna('').astype(str).str.len().max()
-                max_len = max(int(max_val_len) if pd.notna(max_val_len) else 0, len(str(col)))
-                col_letter = get_column_letter(idx)
-                ws_data.column_dimensions[col_letter].width = max(max_len + 4, 14)
+                s_col = df_data[col].dropna().astype(str)
+                max_len = max(s_col.str.len().max() if not s_col.empty else 0, len(str(col)))
+                ws_data.column_dimensions[get_column_letter(idx)].width = min(max(max_len + 4, 14), 50)
 
-            # --- 2. FORMATTING SHEET RANGKUMAN ---
+            # --- 2. FORMAT SHEET RANGKUMAN ---
             ws_sum = writer.sheets["Rangkuman_Ketersediaan"]
             ws_sum.freeze_panes = 'A2'
             if not df_summary.empty:
@@ -245,46 +227,34 @@ class EnginePerapihData:
             
             for r_idx, row in enumerate(ws_sum.iter_rows(min_row=1, max_row=max_row_sum, max_col=max_col_sum), start=1):
                 is_total_row = (r_idx == max_row_sum) and (max_row_sum > 1)
-                if r_idx > 1 and not is_total_row:
-                    ws_sum.row_dimensions[r_idx].height = 20
-                elif is_total_row:
-                    ws_sum.row_dimensions[r_idx].height = 24
+                ws_sum.row_dimensions[r_idx].height = 24 if is_total_row else 20
 
                 for c_idx, cell in enumerate(row, start=1):
                     if r_idx == 1:
-                        cell.font = font_header
-                        cell.fill = fill_header
-                        cell.alignment = align_header
-                        cell.border = border_thin
+                        cell.font, cell.fill, cell.alignment, cell.border = font_header, fill_header, align_header, border_thin
                     elif is_total_row:
-                        cell.font = font_total
-                        cell.fill = fill_total
-                        cell.border = border_total
+                        cell.font, cell.fill, cell.border = font_total, fill_total, border_total
                         cell.alignment = align_left if c_idx == 1 else align_center
-                        if c_idx > 2:
-                            cell.number_format = '0.00"%"'
+                        if c_idx > 2: cell.number_format = '0.00"%"'
                     else:
-                        cell.font = font_data
-                        cell.border = border_thin
-                        if r_idx % 2 == 0:
-                            cell.fill = fill_zebra
+                        cell.font, cell.border = font_data, border_thin
+                        if r_idx % 2 == 0: cell.fill = fill_zebra
                         cell.alignment = align_left if c_idx == 1 else align_center
-                        if c_idx > 2:
-                            cell.number_format = '0.00"%"'
+                        if c_idx > 2: cell.number_format = '0.00"%"'
 
             for idx, col in enumerate(df_summary.columns, 1):
-                max_len = max(df_summary[col].astype(str).str.len().max(), len(str(col))) if not df_summary.empty else len(str(col))
-                if idx > 2:
-                    max_len += 5
-                col_letter = get_column_letter(idx)
-                ws_sum.column_dimensions[col_letter].width = max(max_len + 4, 15)
+                s_col = df_summary[col].astype(str)
+                max_len = max(s_col.str.len().max() if not df_summary.empty else 0, len(str(col)))
+                if idx > 2: max_len += 5
+                ws_sum.column_dimensions[get_column_letter(idx)].width = min(max(max_len + 4, 15), 50)
 
         return output.getvalue()
 
     @classmethod
-    def baca_database_fdb(cls, fdb_file, kolom_aws_resmi):
+    @st.cache_data(show_spinner=False)
+    def baca_database_fdb(cls, fdb_bytes, kolom_aws_resmi):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".fdb") as tmp:
-            tmp.write(fdb_file.getbuffer())
+            tmp.write(fdb_bytes)
             tmp_path = tmp.name
 
         conn = None
@@ -319,16 +289,17 @@ class EnginePerapihData:
                                 if c not in ['Date', 'Time']:
                                     df_mapped[c] = df_tbl[c] if c in df_tbl.columns else ''
                             extracted_dfs.append(df_mapped[kolom_aws_resmi])
-                            if target_table in ['T1MN', 'TBRUT']: break
+                            if target_table in ['T1MN', 'TBRUT']: 
+                                break
                 except Exception:
                     continue
             
-            if extracted_dfs:
-                return pd.concat(extracted_dfs, ignore_index=True)
-            return pd.DataFrame(columns=kolom_aws_resmi)
+            return pd.concat(extracted_dfs, ignore_index=True) if extracted_dfs else pd.DataFrame(columns=kolom_aws_resmi)
         finally:
-            if conn: conn.close()
-            if os.path.exists(tmp_path): os.remove(tmp_path)
+            if conn: 
+                conn.close()
+            if os.path.exists(tmp_path): 
+                os.remove(tmp_path)
 
 
 # --- INTERFASE PENGGUNA (STREAMLIT UI) ---
@@ -352,7 +323,6 @@ with tab_awos:
         'Precip 1Hr (mm) 33': 'Curah Hujan'
     }
     
-    # DARI SINI: Hanya upload file mentah baru
     files_awos = st.file_uploader("Upload File Mentah AWOS", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True, key="awos_new")
     
     if st.button("Proses Data AWOS 🚀", key="btn_awos"):
@@ -361,7 +331,6 @@ with tab_awos:
         else:
             with st.spinner("Memproses, Menyelaraskan Waktu, & Melakukan Quality Control AWOS..."):
                 list_df = []
-                
                 for fp in files_awos:
                     if fp.name.endswith(('.xlsx', '.xls')):
                         df = pd.read_excel(fp)
@@ -412,7 +381,7 @@ with tab_fdb:
         else:
             with st.spinner("Mengekstrak tabel database FDB..."):
                 kolom_aws = ['Date', 'Time', 'S', 'DD', 'FF', 'DM10', 'FM10', 'DD2', 'FF2', 'DVN', 'DVX', 'FVN', 'FVX', 'RR', 'RH', 'TSV', 'DP', 'T', 'GLOR', 'GLORP', 'INSD', 'STAP', 'MSLP', 'GNDT']
-                df_fdb = EnginePerapihData.baca_database_fdb(fdb_file, kolom_aws)
+                df_fdb = EnginePerapihData.baca_database_fdb(fdb_file.getbuffer(), kolom_aws)
                 df_clean = EnginePerapihData.normalize_dataframe(df_fdb)
                 
                 csv_bytes = df_clean.to_csv(index=False).encode('utf-8')
@@ -442,11 +411,10 @@ with tab_aws:
         else:
             with st.spinner("Memproses & Merekonstruksi Data AWS..."):
                 list_df = []
-                
                 for fp in files_aws:
                     ext = fp.name.lower()
                     if ext.endswith('.fdb'):
-                        df_fdb = EnginePerapihData.baca_database_fdb(fp, kolom_aws_resmi)
+                        df_fdb = EnginePerapihData.baca_database_fdb(fp.getbuffer(), kolom_aws_resmi)
                         if not df_fdb.empty: list_df.append(df_fdb)
                     elif ext.endswith('.csv'):
                         list_df.append(pd.read_csv(fp))
