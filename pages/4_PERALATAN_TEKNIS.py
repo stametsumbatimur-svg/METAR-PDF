@@ -1,1219 +1,450 @@
-import streamlit as st
-import pandas as pd
-import sqlite3
 import os
+import sys
+import struct
+import gc
+import io
 import tempfile
-import re
-import json
-import calendar
-from datetime import datetime
-from PIL import Image
-from fpdf import FPDF
+import numpy as np
+import pandas as pd
+import streamlit as st
+from openpyxl.utils import get_column_letter
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
-try:
-    from pypdf import PdfWriter
-    PYPDF_INSTALLED = True
-except ImportError:
-    PYPDF_INSTALLED = False
+# --- KONFIGURASI HALAMAN STREAMLIT ---
+st.set_page_config(
+    page_title="Pengolah Data ALOPTAMA Pro",
+    page_icon="🌤️",
+    layout="wide"
+)
 
-# --- KONFIGURASI METADATA STASIUN & PEJABAT ---
-STATION_NAME = "STASIUN METEOROLOGI KELAS III UMBU MEHANG KUNDA"
-HEAD_OF_STATION_NAME = "Carles Alexander Tari, S.TP"
-HEAD_OF_STATION_NIP = "197712082001121001"
-STATION_CITY = "Waingapu"
-DEFAULT_ALAT_COUNT = 24
+# --- ENGINE OLAH DATA & HELPER ---
+class EnginePerapihData:
+    @staticmethod
+    def smart_parse_datetime(date_series, time_series):
+        combined = date_series.astype(str).str.strip() + ' ' + time_series.astype(str).str.strip()
+        return pd.to_datetime(combined, format='mixed', dayfirst=True, errors='coerce')
 
-# --- KONFIGURASI FILE & FOLDER ---
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-LOGO_FILE = "logo_bmkg.png"
-DB_FILE = "kinerja_teknisi.db"
+    @classmethod
+    def normalize_dataframe(cls, df):
+        if df is None or df.empty:
+            return df
+        if 'Date' not in df.columns or 'Time' not in df.columns:
+            return df
 
-MONTH_MAP = {
-    "Januari": "01", "Februari": "02", "Maret": "03", "April": "04",
-    "Mei": "05", "Juni": "06", "Juli": "07", "Agustus": "08",
-    "September": "09", "Oktober": "10", "November": "11", "Desember": "12"
-}
-
-QUARTER_MAP = {
-    "Triwulan I (Jan - Mar)": {
-        "label": "TRIWULAN I",
-        "months": ["01", "02", "03"],
-        "month_names": ["Januari", "Februari", "Maret"]
-    },
-    "Triwulan II (Apr - Jun)": {
-        "label": "TRIWULAN II",
-        "months": ["04", "05", "06"],
-        "month_names": ["April", "Mei", "Juni"]
-    },
-    "Triwulan III (Jul - Sep)": {
-        "label": "TRIWULAN III",
-        "months": ["07", "08", "09"],
-        "month_names": ["Juli", "Agustus", "September"]
-    },
-    "Triwulan IV (Okt - Des)": {
-        "label": "TRIWULAN IV",
-        "months": ["10", "11", "12"],
-        "month_names": ["Oktober", "November", "Desember"]
-    }
-}
-
-# --- PALET WARNA JADWAL PEMELIHARAAN ---
-COLOR_MAP_JADWAL = {
-    "O": (169, 223, 191),   # Hijau Muda
-    "D": (174, 214, 241),   # Biru Muda
-    "A": (249, 231, 159),   # Kuning Muda
-    "DL": (210, 180, 222),  # Ungu Muda
-    "G": (248, 196, 113)    # Oranye Muda
-}
-
-# --- HELPER KOMPRESI FOTO ---
-def save_uploaded_photo(uploaded_file, output_path, max_size=(800, 800), quality=85):
-    """Mengompresi dan menyimpan foto menjadi JPEG agar hemat penyimpanan & PDF tidak berat."""
-    try:
-        with Image.open(uploaded_file) as img:
-            # Konversi ke RGB jika format gambar memiliki transparansi (RGBA/PNG)
-            if img.mode in ("RGBA", "P"):
-                img = img.convert("RGB")
-            # Resize dengan mempertahankan rasio (thumbnail)
-            img.thumbnail(max_size, Image.Resampling.LANCZOS)
-            # Simpan dengan optimasi ukuran
-            img.save(output_path, "JPEG", optimize=True, quality=quality)
-    except Exception as e:
-        # Fallback standar jika proses pengolahan gambar gagal
-        with open(output_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-
-# --- HELPER PEWARNAAN KATEGORI OLA SLA ---
-def get_percentage_color(val):
-    try:
-        if isinstance(val, str):
-            val = val.replace('%', '').strip()
-        v = float(val)
-        if 0 < v <= 1.0:
-            v = v * 100.0
-        v = round(v, 2)
-    except (ValueError, TypeError):
-        return (255, 255, 255)
-
-    if v >= 100.0:
-        return (169, 223, 191)
-    elif v >= 80.0:
-        return (249, 231, 159)
-    else:
-        return (241, 148, 138)
-
-# --- HELPER PENANGGALAN DINAMIS ---
-def get_last_day_of_month(bulan_nama, tahun):
-    try:
-        m = int(MONTH_MAP.get(bulan_nama, "01"))
-        y = int(tahun)
-        _, last_day = calendar.monthrange(y, m)
-        return last_day
-    except Exception:
-        return 31
-
-def parse_foto_paths(foto_path_val):
-    """Mendukung format lama (string tunggal/koma) & format baru (JSON list)"""
-    if not foto_path_val or pd.isna(foto_path_val):
-        return []
-    fstr = str(foto_path_val).strip()
-    if fstr.startswith("["):
-        try:
-            return json.loads(fstr)
-        except Exception:
-            pass
-    if "," in fstr:
-        return [p.strip() for p in fstr.split(",") if p.strip()]
-    return [fstr]
-
-# --- HELPER DATABASE ---
-def get_db_connection():
-    return sqlite3.connect(DB_FILE)
-
-def init_db():
-    with get_db_connection() as conn:
-        c = conn.cursor()
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS e_kinerja (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                tanggal TEXT,
-                nama_teknisi TEXT,
-                penjelasan_kegiatan TEXT,
-                foto_path TEXT
-            )
-        ''')
-        conn.commit()
-
-init_db()
-
-# --- FORMATTER TANGGAL INDONESIA ---
-def format_tanggal_indo(tanggal_str):
-    try:
-        dt = datetime.strptime(tanggal_str, "%Y-%m-%d")
-        bulan_indo = ["JANUARI", "FEBRUARI", "MARET", "APRIL", "MEI", "JUNI", 
-                      "JULI", "AGUSTUS", "SEPTEMBER", "OKTOBER", "NOVEMBER", "DESEMBER"]
-        return f"{dt.day} {bulan_indo[dt.month-1]} {dt.year}"
-    except Exception:
-        return tanggal_str
-
-# --- PARSER LOGBOOK EXCEL ---
-def parse_logbook(df_log, bulan):
-    bulan_str = f"BULAN {bulan.upper()}"
-    stamet_data, posmet_data = [], []
-    
-    idx_bulan = df_log[df_log[0].astype(str).str.contains(bulan_str, case=False, na=False)].index.tolist()
-    
-    if len(idx_bulan) >= 1:
-        start_umk = idx_bulan[0] + 1
-        for i in range(start_umk, len(df_log)):
-            row_val = str(df_log.iloc[i, 0]).strip().upper()
-            if row_val in ["TOTAL", "NAMA PEGAWAI"] or row_val.startswith("LAPORAN") or "POS METEOROLOGI" in row_val:
-                break
-            col1 = str(df_log.iloc[i, 1]).strip() if pd.notna(df_log.iloc[i, 1]) else ""
-            if col1 and "NAMA ALAT" not in col1.upper() and row_val != "NO":
-                row_list = df_log.iloc[i].values.tolist() + [""] * 10
-                stamet_data.append(row_list[:10])
-                
-    if len(idx_bulan) >= 2:
-        start_posmet = idx_bulan[1] + 1
-        for i in range(start_posmet, len(df_log)):
-            row_val = str(df_log.iloc[i, 0]).strip().upper()
-            if row_val in ["TOTAL", "NAMA PEGAWAI"] or row_val.startswith("LAPORAN"):
-                break
-            col1 = str(df_log.iloc[i, 1]).strip() if pd.notna(df_log.iloc[i, 1]) else ""
-            if col1 and "NAMA ALAT" not in col1.upper() and row_val != "NO":
-                row_list = df_log.iloc[i].values.tolist() + [""] * 10
-                posmet_data.append(row_list[:10])
-                
-    return stamet_data, posmet_data
-
-# --- PARSER JADWAL PEMELIHARAAN EXCEL ---
-def parse_jadwal(df_jadwal, nama_teknisi, bulan_nama):
-    def clean_text(s):
-        return re.sub(r'[,.\-\s]+', ' ', str(s)).upper().strip()
-
-    def get_name_keywords(n):
-        clean = clean_text(n)
-        titles = ['S TR INST', 'S TR', 'S KOM', 'S TP', 'M T', 'ST', 'A MD']
-        for t in titles:
-            clean = clean.replace(t, '')
-        return [w for w in clean.split() if len(w) > 2]
-
-    target_words = get_name_keywords(nama_teknisi)
-
-    month_row = -1
-    for r in range(len(df_jadwal)):
-        row_str = " ".join([str(val).strip().upper() for val in df_jadwal.iloc[r].values if pd.notna(val)])
-        if "BULAN" in row_str and bulan_nama.upper() in row_str and len(row_str) < 60:
-            month_row = r
-            break
-
-    if month_row == -1:
-        for r in range(len(df_jadwal)):
-            row_str = " ".join([str(val).strip().upper() for val in df_jadwal.iloc[r].values if pd.notna(val)])
-            if bulan_nama.upper() in row_str and ("JADWAL" in row_str or "TAHUN" in row_str or "BULAN" in row_str):
-                month_row = r
-                break
-
-    if month_row == -1:
-        return nama_teknisi, "", {}
-
-    next_month_row = len(df_jadwal)
-    other_months = [m.upper() for m in MONTH_MAP.keys() if m.upper() != bulan_nama.upper()]
-    for r in range(month_row + 1, len(df_jadwal)):
-        row_str = " ".join([str(val).strip().upper() for val in df_jadwal.iloc[r].values if pd.notna(val)])
-        if "BULAN" in row_str and any(m in row_str for m in other_months):
-            next_month_row = r
-            break
-
-    day_col_map = {}
-    for r in range(month_row, min(month_row + 10, next_month_row)):
-        row_vals = [str(val).strip() for val in df_jadwal.iloc[r].values]
-        if '1' in row_vals and '2' in row_vals:
-            for col_idx, val in enumerate(row_vals):
-                val_clean = str(val).split('.')[0].strip()
-                if val_clean.isdigit():
-                    d = int(val_clean)
-                    if 1 <= d <= 31 and d not in day_col_map:
-                        day_col_map[d] = col_idx
-            break
-
-    if not day_col_map:
-        for d in range(1, 32):
-            day_col_map[d] = d + 1
-
-    tech_row = -1
-    for r in range(month_row, next_month_row):
-        for c in range(min(5, df_jadwal.shape[1])):
-            cell_val = str(df_jadwal.iloc[r, c])
-            if pd.notna(cell_val) and cell_val.strip().lower() != 'nan':
-                cell_words = get_name_keywords(cell_val)
-                if len(target_words) >= 2 and all(w in cell_words for w in target_words):
-                    tech_row = r
-                    break
-                elif len(target_words) == 1 and target_words[0] in cell_words:
-                    tech_row = r
-                    break
-        if tech_row != -1:
-            break
-
-    if tech_row == -1:
-        return nama_teknisi, "", {}
-
-    nip = ""
-    for r_nip in range(tech_row, min(tech_row + 3, next_month_row)):
-        for c_nip in range(min(5, df_jadwal.shape[1])):
-            val_nip = str(df_jadwal.iloc[r_nip, c_nip])
-            digits = re.sub(r'\D', '', val_nip)
-            if len(digits) >= 12:
-                nip = digits
-                break
-        if nip:
-            break
-
-    jadwal_days = {}
-    for d in range(1, 32):
-        if d in day_col_map:
-            c_idx = day_col_map[d]
-            if c_idx < df_jadwal.shape[1]:
-                val = str(df_jadwal.iloc[tech_row, c_idx]).strip()
-                jadwal_days[d] = val if val.lower() != 'nan' else ""
-        else:
-            jadwal_days[d] = ""
-
-    return nama_teknisi, nip, jadwal_days
-
-# --- HELPER PARSER ITEM OLA SLA ---
-def _extract_ola_item(df_ola, row_st, row_dt):
-    status, data = [], []
-    for c in range(3, 34):
-        v_st = df_ola.iloc[row_st, c] if c < df_ola.shape[1] else None
-        v_dt = df_ola.iloc[row_dt, c] if c < df_ola.shape[1] else None
-        
-        st_str = "" if pd.isna(v_st) or str(v_st).strip().lower() == 'nan' else str(v_st).strip()
-        if pd.isna(v_dt) or str(v_dt).strip().lower() in ['nan', '']:
-            dt_str = ""
-        elif isinstance(v_dt, (int, float)):
-            dt_str = f"{float(v_dt):.2f}"
-        else:
-            dt_str = str(v_dt).strip()
-            
-        status.append(st_str)
-        data.append(dt_str)
-        
-    return {
-        'no': str(df_ola.iloc[row_st, 0]).strip().replace('.0', ''),
-        'kode': str(df_ola.iloc[row_st, 1]).strip().replace('.0', ''),
-        'nama': str(df_ola.iloc[row_st, 2]).strip(),
-        'status_days': status,
-        'status_accum': df_ola.iloc[row_st, 34] if 34 < df_ola.shape[1] else 1,
-        'data_ratios': data,
-        'data_accum': df_ola.iloc[row_dt, 34] if 34 < df_ola.shape[1] else 1
-    }
-
-def parse_olasla(df_ola, bulan_nama):
-    bulan_target = bulan_nama.upper()
-    idx_bulan = [i for i in range(len(df_ola)) if str(df_ola.iloc[i, 2]).strip().upper() == bulan_target]
-            
-    if not idx_bulan:
-        return None
-        
-    row_m = idx_bulan[0]
-    return {
-        'bulan': bulan_nama,
-        'item1': _extract_ola_item(df_ola, row_m + 3, row_m + 4),
-        'item2': _extract_ola_item(df_ola, row_m + 5, row_m + 6)
-    }
-
-# --- CLASS GENERATOR PDF ---
-class PDFKinerja(FPDF):
-    def cetak_kop_surat(self):
-        y_awal = self.get_y()
-        if os.path.exists(LOGO_FILE):
-            self.image(LOGO_FILE, x=14, y=y_awal + 1, w=17)
-            
-        self.set_y(y_awal)
-        self.set_font('helvetica', 'B', 13)
-        self.cell(0, 5, 'BADAN METEOROLOGI, KLIMATOLOGI, DAN GEOFISIKA', align='C', ln=1)
-        self.set_font('helvetica', 'B', 11)
-        self.cell(0, 5, STATION_NAME, align='C', ln=1)
-        
-        self.set_font('helvetica', '', 9)
-        self.cell(0, 4, 'Jl. Adi Sucipto, Waingapu, Sumba Timur', align='C', ln=1)
-        self.cell(0, 4, 'Telp. (0387) 61227 | Fax: (0387) 61228 | Kode Pos 87114', align='C', ln=1)
-        self.cell(0, 4, 'Email: stamet.sumbatimur@bmkg.go.id | Website: http://ntt.bmkg.go.id', align='C', ln=1)
-        
-        y_line = self.get_y() + 2
-        self.set_line_width(1.0)
-        self.line(10, y_line, self.w - 10, y_line)
-        self.set_line_width(0.3)
-        self.line(10, y_line + 1.5, self.w - 10, y_line + 1.5)
-        self.set_y(y_line + 8)
-
-def draw_header_table(pdf, x_start, y_start, w):
-    pdf.set_fill_color(220, 220, 220)
-    pdf.set_font('helvetica', 'B', 8)
-    
-    pdf.rect(x_start, y_start, w[0], 12, style='DF')
-    pdf.rect(x_start+w[0], y_start, w[1], 12, style='DF')
-    pdf.rect(x_start+sum(w[:2]), y_start, w[2], 12, style='DF')
-    pdf.rect(x_start+sum(w[:3]), y_start, w[3], 12, style='DF')
-    
-    x_kondisi = x_start+sum(w[:4])
-    pdf.rect(x_kondisi, y_start, sum(w[4:8]), 6, style='DF')
-    pdf.rect(x_kondisi, y_start+6, w[4], 6, style='DF')
-    pdf.rect(x_kondisi+w[4], y_start+6, w[5], 6, style='DF')
-    pdf.rect(x_kondisi+sum(w[4:6]), y_start+6, w[6], 6, style='DF')
-    pdf.rect(x_kondisi+sum(w[4:7]), y_start+6, w[7], 6, style='DF')
-    
-    x_sisa = x_start+sum(w[:8])
-    pdf.rect(x_sisa, y_start, w[8], 12, style='DF')
-    pdf.rect(x_sisa+w[8], y_start, w[9], 12, style='DF')
-    
-    pdf.set_xy(x_start, y_start+3)
-    pdf.cell(w[0], 6, 'No', align='C')
-    pdf.cell(w[1], 6, 'Nama Alat', align='C')
-    pdf.cell(w[2], 6, 'Lokasi', align='C')
-    pdf.cell(w[3], 6, 'Merk/Type', align='C')
-    
-    pdf.set_xy(x_kondisi, y_start)
-    pdf.cell(sum(w[4:8]), 6, 'KONDISI', align='C')
-    pdf.set_xy(x_kondisi, y_start+6)
-    pdf.cell(w[4], 6, 'PEKAN I', align='C')
-    pdf.cell(w[5], 6, 'PEKAN II', align='C')
-    pdf.cell(w[6], 6, 'PEKAN III', align='C')
-    pdf.cell(w[7], 6, 'PEKAN IV', align='C')
-    
-    pdf.set_xy(x_sisa, y_start + 1.5)
-    pdf.multi_cell(w[8], 4, 'Tahun\nKalibrasi', align='C')
-    pdf.set_xy(x_sisa+w[8], y_start+3)
-    pdf.cell(w[9], 6, 'Pengadaan', align='C')
-
-def draw_logbook_page(pdf, title, data_rows, total_alat_keseluruhan=DEFAULT_ALAT_COUNT, is_posmet=False):
-    pdf.set_font('helvetica', 'B', 10)
-    pdf.cell(0, 6, 'LAPORAN HASIL MONITORING KONDISI PERALATAN OPERASIONAL UTAMA METEOROLOGI', align='C', ln=1)
-    pdf.cell(0, 6, title, align='C', ln=1)
-    pdf.ln(5)
-    
-    if not data_rows:
-        pdf.set_font('helvetica', '', 10)
-        pdf.cell(0, 6, "Data tidak ditemukan. Silakan cek format Excel / Bulan yang dipilih.", align='C', ln=1)
-        return
-
-    w = [8, 65, 30, 35, 16, 16, 16, 16, 25, 23]
-    draw_header_table(pdf, 10, pdf.get_y(), w)
-    
-    pdf.set_y(pdf.get_y() + 12)
-    pdf.set_font('helvetica', '', 8)
-    
-    for row in data_rows:
-        cols = [str(x).replace("nan", "") for x in row]
-        if '00:00:00' in cols[8]: cols[8] = cols[8].split(' ')[0]
-        cols[2] = cols[2].replace('Bandara Umbu Mehang Kunda', 'Bandara Umbu\nMehang Kunda')
-        cols[1] = cols[1][:60]
-        
-        lines = 1
-        if '\n' in cols[2] or len(cols[1]) > 35 or len(cols[3]) > 18:
-            lines = 2
-        if len(cols[1]) > 70:
-            lines = 3
-        row_h = lines * 5
-        
-        if pdf.get_y() + row_h > 185:
-            pdf.add_page(orientation='landscape')
-            draw_header_table(pdf, 10, 15, w)
-            pdf.set_y(27)
-            
-        x = 10
-        y = pdf.get_y()
-        
-        for width in w:
-            pdf.rect(x, y, width, row_h)
-            x += width
-            
-        x = 10
-        for i, text in enumerate(cols):
-            y_offset = y + (0.5 if lines == 1 else 1)
-            pdf.set_xy(x, y_offset)
-            align = 'C' if i != 1 else 'L'
-            pdf.multi_cell(w[i], 4.5, text, border=0, align=align)
-            x += w[i]
-            
-        pdf.set_xy(10, y + row_h)
-
-    if is_posmet:
-        pdf.set_font('helvetica', 'B', 8)
-        lebar_gabungan = sum(w[:4])
-        y = pdf.get_y()
-        
-        if y + 6 > 185:
-            pdf.add_page(orientation='landscape')
-            y = 15
-            
-        pdf.rect(10, y, lebar_gabungan, 6)
-        pdf.rect(10+lebar_gabungan, y, w[4], 6)
-        pdf.set_xy(10, y)
-        pdf.cell(lebar_gabungan, 6, 'TOTAL', border=0, align='C')
-        pdf.cell(w[4], 6, str(total_alat_keseluruhan), border=0, align='C')
-        pdf.set_y(y + 6)
-
-def draw_jadwal_page(pdf, nama_teknisi, nip, bulan_nama, tahun, triwulan_label, days_dict):
-    pdf.set_font('helvetica', 'B', 10)
-    pdf.cell(0, 5, 'JADWAL PEMELIHARAAN', align='L', ln=1)
-    pdf.cell(0, 5, 'STASIUN METEOROLOGI UMBU MEHANG KUNDA', align='L', ln=1)
-    pdf.cell(0, 5, f'TAHUN : {tahun}', align='L', ln=1)
-    if triwulan_label:
-        pdf.cell(0, 5, f'{triwulan_label.upper()}', align='L', ln=1)
-    pdf.cell(0, 5, f'BULAN : {bulan_nama.upper()}', align='L', ln=1)
-    pdf.ln(4)
-    
-    w_name = 60
-    w_day = 7
-    
-    y_hdr = pdf.get_y()
-    pdf.set_font('helvetica', 'B', 8)
-    pdf.set_fill_color(220, 220, 220)
-    
-    pdf.rect(10, y_hdr, w_name, 10, style='DF')
-    pdf.rect(10 + w_name, y_hdr, w_day * 31, 5, style='DF')
-    
-    pdf.set_xy(10, y_hdr + 3)
-    pdf.cell(w_name, 4, 'NAMA PEGAWAI', align='C')
-    pdf.set_xy(10 + w_name, y_hdr + 0.5)
-    pdf.cell(w_day * 31, 4, 'TANGGAL', align='C')
-    
-    for d in range(1, 32):
-        x_d = 10 + w_name + (d - 1) * w_day
-        pdf.rect(x_d, y_hdr + 5, w_day, 5, style='DF')
-        pdf.set_xy(x_d, y_hdr + 5.5)
-        pdf.cell(w_day, 4, str(d), align='C')
-        
-    y_data = y_hdr + 10
-    row_h = 6
-    total_row_h = row_h * 2
-    
-    pdf.rect(10, y_data, w_name, row_h)
-    pdf.set_xy(10, y_data + 1)
-    pdf.set_font('helvetica', 'B', 7)
-    pdf.cell(w_name, 4, nama_teknisi, align='L')
-    
-    pdf.rect(10, y_data + row_h, w_name, row_h)
-    pdf.set_xy(10, y_data + row_h + 1)
-    pdf.set_font('helvetica', '', 7)
-    pdf.cell(w_name, 4, f"NIP. {nip}" if nip else "", align='L')
-    
-    pdf.set_font('helvetica', 'B', 6.5)
-    for d in range(1, 32):
-        x_d = 10 + w_name + (d - 1) * w_day
-        val = str(days_dict.get(d, '')).strip().upper()
-        tokens = [t for t in val.split() if t in COLOR_MAP_JADWAL]
-        
-        if len(tokens) == 1:
-            r, g, b = COLOR_MAP_JADWAL[tokens[0]]
-            pdf.set_fill_color(r, g, b)
-            pdf.rect(x_d, y_data, w_day, total_row_h, style='DF')
-        elif len(tokens) > 1:
-            sub_w = w_day / len(tokens)
-            for idx, tok in enumerate(tokens):
-                r, g, b = COLOR_MAP_JADWAL[tok]
-                pdf.set_fill_color(r, g, b)
-                pdf.rect(x_d + (idx * sub_w), y_data, sub_w, total_row_h, style='DF')
-            pdf.rect(x_d, y_data, w_day, total_row_h)
-        else:
-            pdf.rect(x_d, y_data, w_day, total_row_h)
-            
-        pdf.set_xy(x_d, y_data + (total_row_h / 2) - 2)
-        pdf.cell(w_day, 4, val, align='C')
-        
-    pdf.set_y(y_data + total_row_h + 8)
-    y_sec = pdf.get_y()
-    
-    pdf.set_font('helvetica', 'B', 8)
-    pdf.set_xy(10, y_sec)
-    pdf.cell(40, 4, 'KETERANGAN:', ln=1)
-    
-    legenda = [
-        ("O", "= Pemeliharaan Taman Alat"),
-        ("D", "= Pemeliharaan Display Bandara"),
-        ("A", "= Pemeliharaan AWOS"),
-        ("DL", "= Pengolahan OLA dan SLA"),
-        ("G", "= Pembuatan Gas")
-    ]
-    
-    for kode, ket in legenda:
-        pdf.set_x(10)
-        curr_y = pdf.get_y()
-        if kode in COLOR_MAP_JADWAL:
-            r, g, b = COLOR_MAP_JADWAL[kode]
-            pdf.set_fill_color(r, g, b)
-            pdf.rect(10, curr_y, 8, 4, style='DF')
-            
-        pdf.set_font('helvetica', 'B', 8)
-        pdf.cell(8, 4, kode, align='C')
-        pdf.set_font('helvetica', '', 8)
-        pdf.cell(60, 4, ket, ln=1)
-        
-    last_day = get_last_day_of_month(bulan_nama, tahun)
-    pdf.set_xy(200, y_sec)
-    pdf.set_font('helvetica', '', 9)
-    pdf.cell(80, 4, f'{STATION_CITY}, {last_day} {bulan_nama} {tahun}', align='C', ln=1)
-    pdf.set_x(200)
-    pdf.cell(80, 4, 'Kepala Stasiun Meteorologi', align='C', ln=1)
-    pdf.set_x(200)
-    pdf.cell(80, 4, 'Umbu Mehang Kunda', align='C', ln=1)
-    pdf.ln(18)
-    pdf.set_x(200)
-    pdf.set_font('helvetica', 'BU', 9)
-    pdf.cell(80, 4, HEAD_OF_STATION_NAME, align='C', ln=1)
-    pdf.set_x(200)
-    pdf.set_font('helvetica', '', 9)
-    pdf.cell(80, 4, f'NIP. {HEAD_OF_STATION_NIP}', align='C', ln=1)
-
-def draw_olasla_page(pdf, ola_data, nama_teknisi, nip_teknisi, tahun):
-    if not ola_data:
-        pdf.set_font('helvetica', '', 10)
-        pdf.cell(0, 10, "Data OLA SLA tidak ditemukan untuk bulan ini.", align='C', ln=1)
-        return
-        
-    bulan_nama = ola_data['bulan']
-    
-    pdf.set_font('helvetica', 'B', 10)
-    pdf.cell(0, 5, 'MONITORING HARIAN KONDISI AWOS KAT.I DAN AWS STRENGTHENING', align='C', ln=1)
-    pdf.cell(0, 5, STATION_NAME, align='C', ln=1)
-    pdf.cell(0, 5, f'TAHUN {tahun}', align='C', ln=1)
-    pdf.cell(0, 5, f'{bulan_nama.upper()}', align='C', ln=1)
-    pdf.ln(4)
-    
-    w_no = 6
-    w_kode = 12
-    w_nama = 42
-    w_day = 6.2
-    w_accum = 24
-    
-    y_hdr = pdf.get_y()
-    pdf.set_font('helvetica', 'B', 7)
-    pdf.set_fill_color(220, 220, 220)
-    
-    w_left = w_no + w_kode + w_nama
-    pdf.rect(10, y_hdr, w_left, 10, style='DF')
-    pdf.rect(10 + w_left, y_hdr, w_day * 31, 5, style='DF')
-    pdf.rect(10 + w_left + w_day * 31, y_hdr, w_accum, 10, style='DF')
-    
-    pdf.set_xy(10, y_hdr + 3)
-    pdf.cell(w_left, 4, 'NAMA DAN LOKASI PERALATAN', align='C')
-    pdf.set_xy(10 + w_left, y_hdr + 0.5)
-    pdf.cell(w_day * 31, 4, 'KONDISI PERALATAN DAN DATA TERSEDIA', align='C')
-    pdf.set_xy(10 + w_left + w_day * 31, y_hdr + 1)
-    pdf.multi_cell(w_accum, 3.5, 'AKUMULASI\nON-LINE', align='C')
-    
-    for d in range(1, 32):
-        x_d = 10 + w_left + (d - 1) * w_day
-        pdf.rect(x_d, y_hdr + 5, w_day, 5, style='DF')
-        pdf.set_xy(x_d, y_hdr + 5.5)
-        pdf.cell(w_day, 4, str(d), align='C')
-        
-    y_data = y_hdr + 10
-    row_h = 5.5
-    items = [ola_data['item1'], ola_data['item2']]
-    
-    for item in items:
-        pdf.rect(10, y_data, w_no, row_h)
-        pdf.set_xy(10, y_data + 1)
-        pdf.set_font('helvetica', 'B', 7)
-        pdf.cell(w_no, 4, str(item['no']), align='C')
-        
-        pdf.rect(10 + w_no, y_data, w_kode, row_h)
-        pdf.set_xy(10 + w_no, y_data + 1)
-        pdf.set_font('helvetica', '', 7)
-        pdf.cell(w_kode, 4, str(item['kode']), align='C')
-        
-        pdf.rect(10 + w_no + w_kode, y_data, w_nama, row_h)
-        pdf.set_xy(10 + w_no + w_kode, y_data + 1)
-        pdf.set_font('helvetica', 'B', 7)
-        pdf.cell(w_nama, 4, str(item['nama']), align='L')
-        
-        pdf.set_font('helvetica', 'B', 5.5)
-        for d in range(1, 32):
-            x_d = 10 + w_left + (d - 1) * w_day
-            st_val = str(item['status_days'][d-1] if d-1 < len(item['status_days']) else '').strip().upper()
-            
-            if st_val == "ON":
-                pdf.set_fill_color(169, 223, 191)
-                pdf.rect(x_d, y_data, w_day, row_h, style='DF')
-            elif st_val == "OFF":
-                pdf.set_fill_color(241, 148, 138)
-                pdf.rect(x_d, y_data, w_day, row_h, style='DF')
-            else:
-                pdf.rect(x_d, y_data, w_day, row_h)
-                
-            pdf.set_xy(x_d, y_data + 1)
-            pdf.cell(w_day, 4, st_val, align='C')
-            
-        acc_st = item['status_accum']
-        r, g, b = get_percentage_color(acc_st)
-        pdf.set_fill_color(r, g, b)
-        pdf.rect(10 + w_left + w_day * 31, y_data, w_accum, row_h, style='DF')
-        pdf.set_xy(10 + w_left + w_day * 31, y_data + 1)
-        pdf.set_font('helvetica', 'B', 7)
-        acc_st_str = f"{float(acc_st)*100:.0f}%" if isinstance(acc_st, (int, float)) and acc_st <= 1 else str(acc_st)
-        pdf.cell(w_accum, 4, acc_st_str, align='C')
-        
-        y_data += row_h
-        
-        pdf.rect(10, y_data, w_no, row_h)
-        pdf.rect(10 + w_no, y_data, w_kode, row_h)
-        pdf.set_xy(10 + w_no, y_data + 1)
-        pdf.set_font('helvetica', 'B', 7)
-        pdf.cell(w_kode, 4, 'DATA', align='C')
-        
-        pdf.rect(10 + w_no + w_kode, y_data, w_nama, row_h)
-        
-        pdf.set_font('helvetica', '', 5)
-        for d in range(1, 32):
-            x_d = 10 + w_left + (d - 1) * w_day
-            dt_str = item['data_ratios'][d-1] if d-1 < len(item['data_ratios']) else ''
-            
-            if dt_str != "":
-                r_d, g_d, b_d = get_percentage_color(dt_str)
-                pdf.set_fill_color(r_d, g_d, b_d)
-                pdf.rect(x_d, y_data, w_day, row_h, style='DF')
-            else:
-                pdf.rect(x_d, y_data, w_day, row_h)
-                
-            pdf.set_xy(x_d, y_data + 1)
-            pdf.cell(w_day, 4, str(dt_str), align='C')
-            
-        acc_dt = item['data_accum']
-        r_da, g_da, b_da = get_percentage_color(acc_dt)
-        pdf.set_fill_color(r_da, g_da, b_da)
-        pdf.rect(10 + w_left + w_day * 31, y_data, w_accum, row_h, style='DF')
-        pdf.set_xy(10 + w_left + w_day * 31, y_data + 1)
-        pdf.set_font('helvetica', 'B', 7)
-        acc_dt_str = f"{float(acc_dt)*100:.2f}%" if isinstance(acc_dt, (int, float)) and acc_dt <= 1 else str(acc_dt)
-        pdf.cell(w_accum, 4, acc_dt_str, align='C')
-        
-        y_data += row_h
-        
-    pdf.set_y(y_data + 8)
-    y_sec = pdf.get_y()
-    
-    pdf.set_xy(20, y_sec)
-    pdf.set_font('helvetica', '', 8)
-    pdf.cell(80, 4, 'Mengetahui,', ln=1)
-    pdf.set_x(20)
-    pdf.cell(80, 4, 'Kepala Stasiun', ln=1)
-    pdf.ln(14)
-    pdf.set_x(20)
-    pdf.set_font('helvetica', 'BU', 8)
-    pdf.cell(80, 4, HEAD_OF_STATION_NAME, ln=1)
-    pdf.set_x(20)
-    pdf.set_font('helvetica', '', 8)
-    pdf.cell(80, 4, f'NIP. {HEAD_OF_STATION_NIP}', ln=1)
-    
-    last_day = get_last_day_of_month(bulan_nama, tahun)
-    pdf.set_xy(200, y_sec)
-    pdf.set_font('helvetica', '', 8)
-    pdf.cell(80, 4, f'{STATION_CITY}, {last_day} {bulan_nama} {tahun}', align='C', ln=1)
-    pdf.set_x(200)
-    pdf.cell(80, 4, 'Teknisi', align='C', ln=1)
-    pdf.ln(14)
-    pdf.set_x(200)
-    pdf.set_font('helvetica', 'BU', 8)
-    pdf.cell(80, 4, nama_teknisi, align='C', ln=1)
-    pdf.set_x(200)
-    pdf.set_font('helvetica', '', 8)
-    pdf.cell(80, 4, f"NIP. {nip_teknisi}" if nip_teknisi else "", align='C', ln=1)
-
-def generate_pdf_bytes(nama_teknisi, label_periode, triwulan_label, tahun, df_kegiatan, uploaded_excel, poin_korektif, list_bulan_logbook):
-    pdf = PDFKinerja()
-    
-    # --- 1. KOVER BERKOP REKAPITULASI ---
-    pdf.add_page(orientation='portrait')
-    pdf.cetak_kop_surat()
-    pdf.set_font('helvetica', 'B', 11)
-    pdf.cell(0, 6, 'MENINGKATNYA LAYANAN OPERASIONAL', align='C', ln=1)
-    pdf.cell(0, 6, 'ALOPTAMA METEOROLOGI YANG PRIMA', align='C', ln=1)
-    pdf.cell(0, 6, STATION_NAME, align='C', ln=1)
-    pdf.cell(0, 6, f'{label_periode.upper()} TAHUN {tahun}', align='C', ln=1)
-    pdf.ln(8)
-    
-    pdf.set_font('helvetica', '', 11)
-    pdf.multi_cell(0, 6, f"Persentase Alat Operasional Utama Meteorologi yang Laik Operasi dengan Target 97% di {STATION_NAME} diperoleh menggunakan formula perhitungan sebagai berikut:")
-    pdf.ln(5)
-    
-    pdf.set_font('helvetica', 'I', 11)
-    pdf.cell(0, 6, "Laik Operasi Aloptama MET = (Jumlah aloptama meteorologi yg terpelihara / Jumlah Aloptama meteorologi) x 100%", align='C', ln=1)
-    pdf.ln(3)
-    pdf.set_font('helvetica', 'B', 11)
-    pdf.cell(0, 6, f"Laik Operasi Aloptama MET = {DEFAULT_ALAT_COUNT}/{DEFAULT_ALAT_COUNT} x 100%", align='C', ln=1)
-    pdf.ln(5)
-    
-    pdf.set_font('helvetica', '', 11)
-    pdf.multi_cell(0, 6, "Sehingga hasil persentase untuk peralatan operasional pada periode terkait menghasilkan nilai akurasi sebesar 100%. Adapun capaian hasil tersebut disusun dan didukung oleh laporan yang menjadi dasar pemantauan, pemeliharaan, serta evaluasi kinerja peralatan operasional utama meteorologi, yaitu sebagai berikut:")
-    pdf.ln(5)
-    
-    items = [
-        "Laporan Hasil Monitoring Kondisi Peralatan Operasional Utama Meteorologi",
-        "Laporan Hasil Pemeliharaan Preventif Peralatan Operasional Utama Meteorologi",
-        "Laporan Ketersediaan Data Peralatan Otomatis"
-    ]
-    if poin_korektif:
-        items.append("Laporan Hasil Pemeliharaan Korektif / Kalibrasi Peralatan")
-        
-    for idx, item in enumerate(items, 1):
-        pdf.cell(10, 6, f"{idx}.")
-        pdf.cell(0, 6, item, ln=1)
-        pdf.set_x(10)
-
-    df_log = None
-    df_jadwal_sheet = None
-    df_ola_sheet = None
-    
-    if uploaded_excel is not None:
-        try:
-            df_log = pd.read_excel(uploaded_excel, sheet_name='LOGBOOK', header=None)
-        except Exception:
-            pass
-        try:
-            df_jadwal_sheet = pd.read_excel(uploaded_excel, sheet_name=f'JADWAL {tahun}', header=None)
-        except Exception:
-            try:
-                xl = pd.ExcelFile(uploaded_excel)
-                match = [s for s in xl.sheet_names if 'JADWAL' in s.upper()]
-                if match: df_jadwal_sheet = pd.read_excel(uploaded_excel, sheet_name=match[0], header=None)
-            except Exception: pass
-        try:
-            df_ola_sheet = pd.read_excel(uploaded_excel, sheet_name=f'OLA SLA {tahun}', header=None)
-        except Exception:
-            try:
-                xl = pd.ExcelFile(uploaded_excel)
-                match = [s for s in xl.sheet_names if 'OLA' in s.upper()]
-                if match: df_ola_sheet = pd.read_excel(uploaded_excel, sheet_name=match[0], header=None)
-            except Exception: pass
-
-    # --- 2. LOGBOOK EXCEL ---
-    if df_log is not None:
-        for bulan_item in list_bulan_logbook:
-            stamet_data, posmet_data = parse_logbook(df_log, bulan_item)
-            total_aloptama = sum(1 for r in stamet_data + posmet_data if str(r[0]).strip().isdigit())
-            if total_aloptama == 0:
-                total_aloptama = DEFAULT_ALAT_COUNT
-            
-            pdf.add_page(orientation='landscape')
-            pdf.cetak_kop_surat()
-            draw_logbook_page(pdf, f"STASIUN METEOROLOGI UMBU MEHANG KUNDA - BULAN {bulan_item.upper()}", stamet_data, total_aloptama, is_posmet=False)
-            
-            pdf.add_page(orientation='landscape')
-            pdf.set_y(15) 
-            draw_logbook_page(pdf, f"POS METEOROLOGI TAMBOLAKA - BULAN {bulan_item.upper()}", posmet_data, total_aloptama, is_posmet=True)
-
-    nip_teknisi_dinamis = ""
-
-    # --- 3. JADWAL PEMELIHARAAN ---
-    if df_jadwal_sheet is not None:
-        for bulan_item in list_bulan_logbook:
-            name_res, nip_res, days_dict = parse_jadwal(df_jadwal_sheet, nama_teknisi, bulan_item)
-            if nip_res: 
-                nip_teknisi_dinamis = nip_res
-            pdf.add_page(orientation='landscape')
-            pdf.set_y(15)
-            draw_jadwal_page(pdf, name_res, nip_res, bulan_item, tahun, triwulan_label, days_dict)
-
-    # --- 4. LAMPIRAN DOKUMENTASI FOTO ---
-    for bulan_item in list_bulan_logbook:
-        b_code = MONTH_MAP[bulan_item]
-        df_kegiatan_bulan = df_kegiatan[df_kegiatan['tanggal'].astype(str).str.slice(5, 7) == b_code] if not df_kegiatan.empty else pd.DataFrame()
-        
-        if not df_kegiatan_bulan.empty:
-            df_kegiatan_bulan = df_kegiatan_bulan.sort_values(by=['tanggal', 'id'], ascending=[True, True])
-
-        pdf.add_page(orientation='portrait')
-        pdf.set_y(15)
-        pdf.set_font('helvetica', 'B', 11)
-        pdf.cell(0, 10, f'LAMPIRAN KEGIATAN TEKNISI REGULER: {nama_teknisi.upper()} - BULAN {bulan_item.upper()}', align='L', ln=1)
-        pdf.ln(2)
-        
-        pdf.set_fill_color(180, 200, 255)
-        pdf.set_font('helvetica', 'B', 10)
-        pdf.cell(15, 8, 'NO', border=1, align='C', fill=True)
-        pdf.cell(175, 8, 'PENJELASAN', border=1, align='C', fill=True, ln=1)
-        
-        if df_kegiatan_bulan.empty:
-            pdf.set_font('helvetica', '', 10)
-            y_start = pdf.get_y()
-            pdf.rect(10, y_start, 15, 15)
-            pdf.rect(25, y_start, 175, 15)
-            pdf.set_xy(25, y_start + 4)
-            pdf.cell(175, 6, f"Belum ada data dokumentasi untuk bulan {bulan_item}.", align='C')
-        else:
-            pdf.set_font('helvetica', '', 10)
-            y_start = pdf.get_y()
-            
-            for idx, (_, row) in enumerate(df_kegiatan_bulan.iterrows(), 1):
-                tgl_indo = format_tanggal_indo(row['tanggal'])
-                teks = f"Tanggal: {tgl_indo}\n{row['penjelasan_kegiatan']}"
-                
-                raw_photos = parse_foto_paths(row.get('foto_path'))
-                valid_photos = [p for p in raw_photos if pd.notna(p) and os.path.exists(p)]
-                num_photos = len(valid_photos)
-                
-                img_rows = 1 if num_photos <= 1 else (num_photos + 1) // 2
-                row_h = max(65, 15 + (img_rows * 48))
-                
-                if y_start + row_h > 270:
-                    pdf.add_page(orientation='portrait')
-                    pdf.set_y(15)
-                    pdf.set_font('helvetica', 'B', 10)
-                    pdf.cell(15, 8, 'NO', border=1, align='C', fill=True)
-                    pdf.cell(175, 8, 'PENJELASAN', border=1, align='C', fill=True, ln=1)
-                    pdf.set_font('helvetica', '', 10)
-                    y_start = pdf.get_y()
-                    
-                pdf.rect(10, y_start, 15, row_h)
-                pdf.rect(25, y_start, 175, row_h)
-                
-                pdf.set_xy(10, y_start + (row_h/2) - 3)
-                pdf.cell(15, 6, str(idx), align='C')
-                
-                pdf.set_xy(25, y_start + 3)
-                pdf.multi_cell(175, 5, teks, align='C')
-                
-                img_base_y = y_start + 15
-                
-                if valid_photos:
-                    if num_photos == 1:
-                        fp = valid_photos[0]
-                        try:
-                            with Image.open(fp) as img:
-                                img_w, img_h = img.size
-                            max_w, max_h = 130.0, 45.0
-                            ratio = min(max_w / img_w, max_h / img_h)
-                            fit_w = img_w * ratio
-                            fit_h = img_h * ratio
-                            fit_x = 25.0 + (175.0 - fit_w) / 2.0
-                            fit_y = img_base_y + (max_h - fit_h) / 2.0
-                            pdf.image(fp, x=fit_x, y=fit_y, w=fit_w, h=fit_h)
-                        except Exception:
-                            pdf.set_xy(25, img_base_y + 15)
-                            pdf.cell(175, 6, "[Format Gambar Error / Corrupt]", align='C')
-                    else:
-                        box_w, box_h = 82.0, 44.0
-                        for p_idx, fp in enumerate(valid_photos):
-                            r_idx = p_idx // 2
-                            c_idx = p_idx % 2
-                            x_pos = 28.0 + c_idx * (box_w + 5.0)
-                            y_pos = img_base_y + r_idx * (box_h + 4.0)
-                            
-                            try:
-                                with Image.open(fp) as img:
-                                    img_w, img_h = img.size
-                                ratio = min(box_w / img_w, box_h / img_h)
-                                fit_w = img_w * ratio
-                                fit_h = img_h * ratio
-                                fit_x = x_pos + (box_w - fit_w) / 2.0
-                                fit_y = y_pos + (box_h - fit_h) / 2.0
-                                pdf.image(fp, x=fit_x, y=fit_y, w=fit_w, h=fit_h)
-                            except Exception:
-                                pdf.set_xy(x_pos, y_pos + 15)
-                                pdf.cell(box_w, 6, "[Format Gambar Error]", align='C')
-                else:
-                    pdf.set_xy(25, img_base_y + 15)
-                    pdf.cell(175, 6, "[Tidak Ada Gambar Diunggah]", align='C')
-                    
-                y_start += row_h + 3
-
-    # --- 5. OLA SLA ---
-    if df_ola_sheet is not None:
-        for bulan_item in list_bulan_logbook:
-            ola_data = parse_olasla(df_ola_sheet, bulan_item)
-            pdf.add_page(orientation='landscape')
-            pdf.set_y(15)
-            draw_olasla_page(pdf, ola_data, nama_teknisi, nip_teknisi_dinamis, tahun)
-
-    out = pdf.output(dest='S')
-    if isinstance(out, str):
-        return out.encode('latin-1')
-    return bytes(out)
-
-# --- STREAMLIT UI ---
-st.title("🛠️ Laporan & E-Kinerja Teknisi")
-
-tab1, tab2, tab3 = st.tabs(["📝 Input Kegiatan Harian", "📅 Data Kinerja (DB & Kelola)", "🖨️ Cetak PDF E-Kinerja"])
-
-opsi_kegiatan = [
-    "Pemeliharaan Taman Alat",
-    "Pemeliharaan Display Bandara",
-    "Pemeliharaan AWOS",
-    "Pengolahan OLA dan SLA",
-    "Pembuatan Gas"
-]
-teknisi_list = [
-    "Zulqha Ariandi Al Zikri, S.Tr.Inst.", 
-    "Adi Junaidi Rachman, S.Kom.", 
-    "Luqmanul Hakim, S.Tr.", 
-    "Mohammad Hasyim Hanif, S.Tr.Inst."
-]
-
-with tab1:
-    st.subheader("Form Input Dokumentasi Kegiatan")
-    with st.form("form_kinerja", clear_on_submit=True):
-        col1, col2 = st.columns(2)
-        with col1:
-            tanggal = st.date_input("Tanggal Kegiatan", datetime.today())
-            nama = st.selectbox("Nama Teknisi", teknisi_list)
-        with col2:
-            kegiatan_dipilih = st.multiselect("Penjelasan Kegiatan", opsi_kegiatan)
-            
-        fotos = st.file_uploader(
-            "Upload Foto Dokumentasi (Bisa Pilih Banyak Foto)", 
-            type=['jpg', 'jpeg', 'png'], 
-            accept_multiple_files=True
+        valid_mask = (
+            df['Date'].notna() & 
+            df['Date'].astype(str).str.strip().ne('') & 
+            (df['Date'].astype(str).str.strip().str.lower() != 'nan')
         )
-        submit = st.form_submit_button("Simpan Data")
-        
-        if submit:
-            if not kegiatan_dipilih:
-                st.error("Silakan pilih minimal satu Penjelasan Kegiatan!")
-            else:
-                kegiatan_str = ", ".join(kegiatan_dipilih) 
-                saved_paths = []
-                
-                if fotos:
-                    for idx, foto in enumerate(fotos):
-                        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                        fname = f"{timestamp_str}_{idx}.jpg" # Standarisasi ektensi file
-                        file_path = os.path.join(UPLOAD_DIR, fname)
-                        
-                        # Terapkan kompresi sebelum disimpan
-                        save_uploaded_photo(foto, file_path)
-                        saved_paths.append(file_path)
-                    
-                foto_db_val = json.dumps(saved_paths) if saved_paths else ""
-                
-                with get_db_connection() as conn:
-                    c = conn.cursor()
-                    c.execute(
-                        "INSERT INTO e_kinerja (tanggal, nama_teknisi, penjelasan_kegiatan, foto_path) VALUES (?, ?, ?, ?)",
-                        (tanggal.strftime("%Y-%m-%d"), nama, kegiatan_str, foto_db_val)
-                    )
-                    conn.commit()
-                st.success(f"Data kegiatan berhasil disimpan! ({len(saved_paths)} foto tersimpan & dikompresi)")
+        df_clean = df[valid_mask].copy()
 
-with tab2:
-    st.subheader("Arsip & Pengelolaan Data Kegiatan Teknisi")
-    
-    with get_db_connection() as conn:
-        df_db = pd.read_sql("SELECT * FROM e_kinerja ORDER BY tanggal ASC, id ASC", conn)
-        
-    if not df_db.empty:
-        st.dataframe(df_db, use_container_width=True)
-        st.caption("ℹ️ *Data di atas telah diurutkan secara otomatis berdasarkan kronologi tanggal.*")
-        st.markdown("---")
-        
-        col_act1, col_act2 = st.columns(2)
-        
-        # --- SUB-AKSI 1: EDIT DATA ---
-        with col_act1:
-            with st.expander("✏️ Edit Data Kegiatan", expanded=False):
-                list_id = df_db['id'].tolist()
-                id_selected = st.selectbox("Pilih ID Data untuk Diedit:", list_id, key="select_edit_id")
-                
-                row_edit = df_db[df_db['id'] == id_selected].iloc[0]
-                
-                with st.form("form_edit_db"):
-                    edit_tgl_val = datetime.strptime(row_edit['tanggal'], "%Y-%m-%d") if row_edit['tanggal'] else datetime.today()
-                    edit_tanggal = st.date_input("Tanggal Kegiatan", edit_tgl_val)
-                    
-                    idx_tek = teknisi_list.index(row_edit['nama_teknisi']) if row_edit['nama_teknisi'] in teknisi_list else 0
-                    edit_nama = st.selectbox("Nama Teknisi", teknisi_list, index=idx_tek)
-                    
-                    curr_keg = [k.strip() for k in str(row_edit['penjelasan_kegiatan']).split(",") if k.strip()]
-                    edit_kegiatan = st.multiselect(
-                        "Penjelasan Kegiatan", 
-                        opsi_kegiatan, 
-                        default=[k for k in curr_keg if k in opsi_kegiatan]
-                    )
-                    
-                    st.caption("Status Foto Dokumentasi:")
-                    exist_photos = parse_foto_paths(row_edit['foto_path'])
-                    st.write(f"Tersimpan {len(exist_photos)} foto.")
-                    
-                    opsi_foto = st.radio("Opsi Foto Baru:", ["Pertahankan Foto Lama", "Ganti/Tambah Foto Baru"], horizontal=True)
-                    new_edit_fotos = []
-                    if opsi_foto == "Ganti/Tambah Foto Baru":
-                        new_edit_fotos = st.file_uploader(
-                            "Upload Foto Pengganti", 
-                            type=['jpg', 'jpeg', 'png'], 
-                            accept_multiple_files=True,
-                            key="uploader_edit"
-                        )
-                        
-                    btn_submit_edit = st.form_submit_button("Simpan Perubahan Data")
-                    
-                    if btn_submit_edit:
-                        if not edit_kegiatan:
-                            st.error("Pilih minimal 1 kegiatan!")
-                        else:
-                            kegiatan_edit_str = ", ".join(edit_kegiatan)
-                            
-                            if opsi_foto == "Ganti/Tambah Foto Baru" and new_edit_fotos:
-                                for p in exist_photos:
-                                    if os.path.exists(p):
-                                        try: os.remove(p)
-                                        except Exception: pass
-                                
-                                saved_edit_paths = []
-                                for idx, foto in enumerate(new_edit_fotos):
-                                    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                                    fname = f"EDIT_{timestamp_str}_{idx}.jpg"
-                                    file_path = os.path.join(UPLOAD_DIR, fname)
-                                    
-                                    # Terapkan kompresi pada foto pengganti
-                                    save_uploaded_photo(foto, file_path)
-                                    saved_edit_paths.append(file_path)
-                                final_foto_path = json.dumps(saved_edit_paths)
-                            else:
-                                final_foto_path = row_edit['foto_path']
-                                
-                            with get_db_connection() as conn:
-                                c = conn.cursor()
-                                c.execute(
-                                    "UPDATE e_kinerja SET tanggal = ?, nama_teknisi = ?, penjelasan_kegiatan = ?, foto_path = ? WHERE id = ?",
-                                    (edit_tanggal.strftime("%Y-%m-%d"), edit_nama, kegiatan_edit_str, final_foto_path, id_selected)
-                                )
-                                conn.commit()
-                            st.success(f"Data ID {id_selected} berhasil diperbarui!")
-                            st.rerun()
+        df_clean['datetime_temp'] = cls.smart_parse_datetime(df_clean['Date'], df_clean['Time'])
+        df_clean.dropna(subset=['datetime_temp'], inplace=True)
 
-        # --- SUB-AKSI 2: HAPUS DATA ---
-        with col_act2:
-            with st.expander("🗑️ Hapus Data Kegiatan", expanded=False):
-                id_del_selected = st.selectbox("Pilih ID Data untuk Dihapus:", df_db['id'].tolist(), key="select_del_id")
-                row_del = df_db[df_db['id'] == id_del_selected].iloc[0]
-                
-                st.warning(f"Apakah Anda yakin ingin menghapus data ID **{id_del_selected}** ({row_del['tanggal']} - {row_del['nama_teknisi']})?")
-                
-                if st.button("Hapus Permanen Data Selected", type="primary"):
-                    del_photos = parse_foto_paths(row_del['foto_path'])
-                    for p in del_photos:
-                        if os.path.exists(p):
-                            try: os.remove(p)
-                            except Exception: pass
-                            
-                    with get_db_connection() as conn:
-                        c = conn.cursor()
-                        c.execute("DELETE FROM e_kinerja WHERE id = ?", (id_del_selected,))
-                        conn.commit()
-                    st.success(f"Data ID {id_del_selected} beserta foto terkait berhasil dihapus!")
-                    st.rerun()
-    else:
-        st.info("Belum ada data kegiatan yang diinput.")
+        # Deduplikasi & Urutkan Berdasarkan Waktu
+        df_clean.drop_duplicates(subset=['datetime_temp'], inplace=True)
+        df_clean.set_index('datetime_temp', inplace=True)
+        df_clean.sort_index(inplace=True)
 
-with tab3:
-    st.subheader("Generate Dokumen E-Kinerja & Logbook")
-    
-    jenis_laporan = st.radio("Pilih Tipe Laporan:", ["Bulanan", "Triwulan"], horizontal=True)
-    
-    col_a, col_b, col_c = st.columns(3)
-    with col_a:
-        filter_nama = st.selectbox("Pilih Teknisi", teknisi_list)
-    
-    with col_b:
-        if jenis_laporan == "Bulanan":
-            filter_bulan = st.selectbox("Pilih Bulan", list(MONTH_MAP.keys()))
-            filter_triwulan = None
-        else:
-            filter_triwulan = st.selectbox("Pilih Triwulan", list(QUARTER_MAP.keys()))
-            filter_bulan = None
-
-    with col_c:
-        filter_tahun = st.selectbox("Pilih Tahun", ["2026", "2027", "2028"])
+        # Resample Kontinu 1-Menit (Time Series Regularity)
+        if not df_clean.empty:
+            df_clean = df_clean.resample('1min').asfreq()
         
-    st.markdown("---")
-    st.markdown("#### 🖇️ Konfigurasi Lampiran")
-    
-    uploaded_excel = st.file_uploader("1. Wajib: File Excel Logbook (Peralatan Teknis.xlsx)", type=['xlsx', 'xls'])
-    poin_korektif = st.checkbox("Tambahkan Poin Ke-4 (Laporan Korektif/Kalibrasi) di Narasi Hal. 1")
-    
-    pdf_kalibrasi = None
-    if PYPDF_INSTALLED:
-        pdf_kalibrasi = st.file_uploader("2. Opsional: Upload PDF Laporan Kalibrasi/Korektif", type=['pdf'])
-    else:
-        st.caption("📝 *Install `pypdf` (`pip install pypdf`) untuk mengaktifkan penggabungan file PDF.*")
-    
-    st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("Tarik Data & Generate PDF Lengkap 🚀"):
-        if uploaded_excel is None:
-            st.error("Silakan unggah File Excel terlebih dahulu untuk menarik Logbook!")
-        else:
-            if jenis_laporan == "Bulanan":
-                label_periode = f"BULAN {filter_bulan.upper()}"
-                triwulan_label = ""
-                list_bulan_logbook = [filter_bulan]
-                bulan_code = MONTH_MAP[filter_bulan]
-                query = "SELECT * FROM e_kinerja WHERE nama_teknisi = ? AND strftime('%m', tanggal) = ? AND strftime('%Y', tanggal) = ? ORDER BY tanggal ASC, id ASC"
-                params = [filter_nama, bulan_code, filter_tahun]
-            else:
-                q_info = QUARTER_MAP[filter_triwulan]
-                label_periode = f"{q_info['label']} ({q_info['month_names'][0].upper()} - {q_info['month_names'][-1].upper()})"
-                triwulan_label = q_info['label']
-                list_bulan_logbook = q_info["month_names"]
-                months_code = q_info["months"]
-                query = f"SELECT * FROM e_kinerja WHERE nama_teknisi = ? AND strftime('%m', tanggal) IN ({','.join(['?']*len(months_code))}) AND strftime('%Y', tanggal) = ? ORDER BY tanggal ASC, id ASC"
-                params = [filter_nama] + months_code + [filter_tahun]
+        df_clean.reset_index(inplace=True)
+        df_clean['Date'] = df_clean['datetime_temp'].dt.strftime('%Y-%m-%d')
+        df_clean['Time'] = df_clean['datetime_temp'].dt.strftime('%H:%M:00')
+
+        # Type Casting Numerik
+        cols_to_exclude = ['Date', 'Time', 'datetime_temp', 'Date_Time_Raw', 'S']
+        for col in df_clean.columns:
+            if col not in cols_to_exclude:
+                df_clean[col] = df_clean[col].astype(str).replace(r'^/+$', np.nan, regex=True)
+                df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
+
+        # Quality Control (QC) Range Check Fisik
+        for col in ['T', 'Air Tmp (C) 33']:
+            if col in df_clean.columns:
+                df_clean.loc[(df_clean[col] < -50) | (df_clean[col] > 60), col] = np.nan
+        for col in ['RH', 'RH (%) 33']:
+            if col in df_clean.columns:
+                df_clean.loc[(df_clean[col] < 0) | (df_clean[col] > 100), col] = np.nan
+        for col in ['DD', 'Mag WD (deg) 33']:
+            if col in df_clean.columns:
+                df_clean.loc[(df_clean[col] < 0) | (df_clean[col] > 360), col] = np.nan
+        for col in ['FF', 'WS (kt) 33']:
+            if col in df_clean.columns:
+                df_clean.loc[(df_clean[col] < 0) | (df_clean[col] > 150), col] = np.nan
+        for p_col in ['STAP', 'MSLP', 'QFE (hPa) 33', 'QNH (hPa) 33']:
+            if p_col in df_clean.columns:
+                df_clean.loc[(df_clean[p_col] < 600) | (df_clean[p_col] > 1150), p_col] = np.nan
+
+        # Kalkulasi Titik Embun (DP) Otomatis
+        t_col = 'T' if 'T' in df_clean.columns else ('Air Tmp (C) 33' if 'Air Tmp (C) 33' in df_clean.columns else None)
+        rh_col = 'RH' if 'RH' in df_clean.columns else ('RH (%) 33' if 'RH (%) 33' in df_clean.columns else None)
+        dp_col = 'DP' if 'DP' in df_clean.columns else ('Dew Pt (C) 33' if 'Dew Pt (C) 33' in df_clean.columns else 'DP')
+
+        if t_col and rh_col:
+            valid_trh = df_clean[t_col].notna() & df_clean[rh_col].notna()
+            a, b = 17.27, 237.7
+            alpha = ((a * df_clean[t_col]) / (b + df_clean[t_col])) + np.log(df_clean[rh_col] / 100.0)
+            dp_calc = (b * alpha) / (a - alpha)
+            dp_calc = dp_calc.round(1)
             
-            with get_db_connection() as conn:
-                df_filter = pd.read_sql(query, conn, params=params)
+            if dp_col not in df_clean.columns:
+                df_clean[dp_col] = np.nan
+                
+            missing_dp = df_clean[dp_col].isna()
+            df_clean.loc[missing_dp & valid_trh, dp_col] = dp_calc[missing_dp & valid_trh]
+
+        df_clean.drop(columns=['datetime_temp'], inplace=True, errors='ignore')
+        return df_clean
+
+    @staticmethod
+    def parse_text_lines(lines, kolom_aws_resmi):
+        if not lines: return []
+        data_rows = []
+        start_idx = 0
+        first_line = lines[0].strip()
+        tokens_first = first_line.split()
+        if tokens_first:
+            t0 = tokens_first[0].lower()
+            if 'date' in t0 or 'tgl' in t0 or 'tanggal' in t0 or 'waktu' in t0 or not any(c.isdigit() for c in t0):
+                start_idx = 1
+
+        for baris in lines[start_idx:]:
+            tokens = baris.strip().split()
+            if not tokens: continue
             
-            with st.spinner('Menyusun Logbook, Jadwal, Lampiran Foto, OLA SLA & Memformat PDF...'):
-                pdf_bytes = generate_pdf_bytes(
-                    filter_nama, 
-                    label_periode, 
-                    triwulan_label,
-                    filter_tahun, 
-                    df_filter, 
-                    uploaded_excel, 
-                    poin_korektif, 
-                    list_bulan_logbook
+            if len(tokens) > 1 and ':' in tokens[1]:
+                date_val, time_val = tokens[0], tokens[1]
+                remaining_tokens = tokens[2:]
+            else:
+                date_val, time_val = tokens[0], '00:00:00'
+                remaining_tokens = tokens[1:]
+            
+            while len(remaining_tokens) < 22:
+                remaining_tokens.append('')
+            data_rows.append([date_val, time_val] + remaining_tokens[:22])
+            
+        return data_rows
+
+    @staticmethod
+    def buat_rangkuman_per_sensor(df, sensor_labels):
+        TOTAL_HARUSNYA_PER_HARI = 1440
+        list_sensor = list(sensor_labels.keys())
+        
+        valid_df = df[df['Date'].notna() & (df['Date'] != '')].copy()
+        if valid_df.empty:
+            cols = ['Date', 'Total Menit Log'] + [f'{label} (%)' for label in sensor_labels.values()] + ['PERSENTASE TOTAL KESELURUHAN (%)']
+            return pd.DataFrame(columns=cols)
+
+        grouped = valid_df.groupby('Date', sort=False)
+        summary_data = []
+        
+        for date, group in grouped:
+            row_summary = {'Date': date, 'Total Menit Log': int(len(group))}
+            total_valid_all_sensors = 0
+            total_possible_all_sensors = len(list_sensor) * TOTAL_HARUSNYA_PER_HARI
+            
+            for sensor in list_sensor:
+                label = sensor_labels[sensor]
+                valid_count = int(group[sensor].notna().sum()) if sensor in group.columns else 0
+                percentage = min((valid_count / TOTAL_HARUSNYA_PER_HARI) * 100, 100.0)
+                row_summary[f'{label} (%)'] = float(round(percentage, 2))
+                total_valid_all_sensors += valid_count
+            
+            overall_percentage = min((total_valid_all_sensors / total_possible_all_sensors) * 100, 100.0)
+            row_summary['PERSENTASE TOTAL KESELURUHAN (%)'] = float(round(overall_percentage, 2))
+            summary_data.append(row_summary)
+            
+        summary_df = pd.DataFrame(summary_data)
+        summary_df['date_temp'] = pd.to_datetime(summary_df['Date'], errors='coerce')
+        summary_df.sort_values('date_temp', inplace=True)
+        summary_df.drop(columns=['date_temp'], inplace=True, errors='ignore')
+        
+        if not summary_df.empty:
+            avg_row = {
+                'Date': 'RATA-RATA & TOTAL BULANAN', 
+                'Total Menit Log': int(summary_df['Total Menit Log'].sum())
+            }
+            for col in summary_df.columns:
+                if col not in ['Date', 'Total Menit Log']:
+                    avg_row[col] = float(round(summary_df[col].mean(), 2))
+            summary_df = pd.concat([summary_df, pd.DataFrame([avg_row])], ignore_index=True)
+            
+        return summary_df
+
+    @staticmethod
+    def simpan_ke_excel_bytes(df_data, df_summary, data_sheet_name):
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df_data.to_excel(writer, index=False, sheet_name=data_sheet_name)
+            df_summary.to_excel(writer, index=False, sheet_name="Rangkuman_Ketersediaan")
+            
+            font_header = Font(name='Arial', size=11, bold=True, color='FFFFFF')
+            fill_header = PatternFill(start_color='1F4E78', end_color='1F4E78', fill_type='solid')
+            align_header = Alignment(horizontal='center', vertical='center', wrap_text=True)
+            font_data = Font(name='Arial', size=10)
+            fill_zebra = PatternFill(start_color='F2F5F9', end_color='F2F5F9', fill_type='solid')
+            align_center = Alignment(horizontal='center', vertical='center')
+            align_left = Alignment(horizontal='left', vertical='center')
+            font_total = Font(name='Arial', size=11, bold=True, color='000000')
+            fill_total = PatternFill(start_color='D9E1F2', end_color='D9E1F2', fill_type='solid')
+            side_thin = Side(style='thin', color='D9D9D9')
+            border_thin = Border(left=side_thin, right=side_thin, top=side_thin, bottom=side_thin)
+            border_total = Border(left=side_thin, right=side_thin, top=side_thin, bottom=Side(style='double', color='000000'))
+
+            ws_data = writer.sheets[data_sheet_name]
+            ws_data.freeze_panes = 'A2'
+            ws_data.auto_filter.ref = ws_data.dimensions
+            
+            for cell in ws_data[1]:
+                cell.font = font_header
+                cell.fill = fill_header
+                cell.alignment = align_header
+                cell.border = border_thin
+
+            ws_sum = writer.sheets["Rangkuman_Ketersediaan"]
+            ws_sum.freeze_panes = 'A2'
+            if not df_summary.empty:
+                ws_sum.auto_filter.ref = ws_sum.dimensions
+                
+            max_row_sum = ws_sum.max_row
+            max_col_sum = ws_sum.max_column
+            
+            for r_idx, row in enumerate(ws_sum.iter_rows(min_row=1, max_row=max_row_sum, max_col=max_col_sum), start=1):
+                is_total_row = (r_idx == max_row_sum) and (max_row_sum > 1)
+                for c_idx, cell in enumerate(row, start=1):
+                    if r_idx == 1:
+                        cell.font, cell.fill, cell.alignment, cell.border = font_header, fill_header, align_header, border_thin
+                    elif is_total_row:
+                        cell.font, cell.fill, cell.border = font_total, fill_total, border_total
+                        cell.alignment = align_left if c_idx == 1 else align_center
+                        if c_idx > 2: cell.number_format = '0.00"%"'
+                    else:
+                        cell.font, cell.border = font_data, border_thin
+                        if r_idx % 2 == 0: cell.fill = fill_zebra
+                        cell.alignment = align_left if c_idx == 1 else align_center
+                        if c_idx > 2: cell.number_format = '0.00"%"'
+
+        return output.getvalue()
+
+    @classmethod
+    def baca_database_fdb(cls, fdb_file, kolom_aws_resmi):
+        # Menyimpan berkas sementara untuk koneksi driver Firebird
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".fdb") as tmp:
+            tmp.write(fdb_file.getbuffer())
+            tmp_path = tmp.name
+
+        conn = None
+        try:
+            try:
+                import fdb
+                conn = fdb.connect(dsn=tmp_path, user='sysdba', password='masterkey')
+            except Exception:
+                from firebird.driver import connect
+                conn = connect(tmp_path, user='sysdba', password='masterkey')
+                
+            cursor = conn.cursor()
+            cursor.execute("SELECT RDB$RELATION_NAME FROM RDB$RELATIONS WHERE RDB$SYSTEM_FLAG = 0 AND RDB$VIEW_BLR IS NULL")
+            all_tables = [row[0].strip().upper() for row in cursor.fetchall()]
+            
+            priority_order = ['T1MN', 'TBRUT', 'T1H']
+            sorted_tables = [t for t in priority_order if t in all_tables] + [t for t in all_tables if t not in priority_order]
+            
+            extracted_dfs = []
+            for target_table in sorted_tables:
+                try:
+                    cursor.execute(f'SELECT * FROM "{target_table}"')
+                    df_tbl = pd.DataFrame(cursor.fetchall(), columns=[f[0] for f in cursor.description])
+                    if not df_tbl.empty:
+                        # Parsing sederhana
+                        df_mapped = pd.DataFrame(index=df_tbl.index)
+                        dt_col = next((c for c in df_tbl.columns if c.upper() in ['DATACQ', 'DATETIME', 'DATE_TIME', 'DATE']), None)
+                        if dt_col:
+                            dt_parsed = pd.to_datetime(df_tbl[dt_col], errors='coerce')
+                            df_mapped['Date'] = dt_parsed.dt.strftime('%Y-%m-%d')
+                            df_mapped['Time'] = dt_parsed.dt.strftime('%H:%M:00')
+                            for c in kolom_aws_resmi:
+                                if c not in ['Date', 'Time']:
+                                    df_mapped[c] = df_tbl[c] if c in df_tbl.columns else ''
+                            extracted_dfs.append(df_mapped[kolom_aws_resmi])
+                            if target_table in ['T1MN', 'TBRUT']: break
+                except Exception:
+                    continue
+            
+            if extracted_dfs:
+                return pd.concat(extracted_dfs, ignore_index=True)
+            return pd.DataFrame(columns=kolom_aws_resmi)
+        finally:
+            if conn: conn.close()
+            if os.path.exists(tmp_path): os.remove(tmp_path)
+
+
+# --- INTERFASE PENGGUNA (STREAMLIT UI) ---
+st.title("🌤️ Pengolah Data ALOPTAMA Meteorologi")
+st.caption("Aplikasi Rekapitulasikan & Normalisasi Data AWOS & AWS (Power BI Ready) - By Luqmanul Hakim, S.Tr")
+
+tab_awos, tab_fdb, tab_aws, tab_info = st.tabs([
+    "1. 📊 Panel AWOS", 
+    "2. ⚡ Ekstrak FDB ke CSV", 
+    "3. 🛰️ Panel AWS", 
+    "4. ℹ️ Informasi Sistem"
+])
+
+# --- TAB 1: AWOS ---
+with tab_awos:
+    st.subheader("Pengolahan Data AWOS (.CSV / .XLSX)")
+    awos_labels = {
+        'Air Tmp (C) 33': 'Suhu Udara', 'Dew Pt (C) 33': 'Titik Embun',
+        'RH (%) 33': 'Kelembaban', 'QFE (hPa) 33': 'Tekanan QFE',
+        'QNH (hPa) 33': 'Tekanan QNH', 'WS (kt) 33': 'Kecepatan Angin',
+        'Mag WD (deg) 33': 'Arah Angin', 'Solar Rad (W/m^2) 33': 'Radiasi Matahari',
+        'Precip 1Hr (mm) 33': 'Curah Hujan'
+    }
+    
+    excel_lama_awos = st.file_uploader(" (Opsional) Gabungkan dengan File Excel AWOS Lama", type=['xlsx'], key="awos_old")
+    files_awos = st.file_uploader("Upload File Mentah AWOS Tambahan / Baru", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True, key="awos_new")
+    
+    if st.button("Proses Data AWOS 🚀", key="btn_awos"):
+        if not files_awos and not excel_lama_awos:
+            st.error("Silakan upload minimal satu file AWOS!")
+        else:
+            with st.spinner("Memproses, Menyelaraskan Waktu, & Melakukan Quality Control AWOS..."):
+                list_df = []
+                if excel_lama_awos:
+                    list_df.append(pd.read_excel(excel_lama_awos, sheet_name="Data_AWOS_Clean"))
+                
+                for fp in files_awos:
+                    if fp.name.endswith(('.xlsx', '.xls')):
+                        df = pd.read_excel(fp)
+                        mapping_eg = {
+                            'Date and Time': 'Date_Time_Raw', 'airTemperatureValidated.RWYA': 'Air Tmp (C) 33',
+                            'dewPointValidated.RWYA': 'Dew Pt (C) 33', 'relativeHumidityValidated.RWYA': 'RH (%) 33',
+                            'QFE.RWYA': 'QFE (hPa) 33', 'QNH.RWYA': 'QNH (hPa) 33', 'windSpeedSelected.RWYA': 'WS (kt) 33',
+                            'instant.windDirection.RWYA': 'Mag WD (deg) 33', 'solarRadiation.RWYA': 'Solar Rad (W/m^2) 33',
+                            'oneHour.precipSelected.RWYA': 'Precip 1Hr (mm) 33'
+                        }
+                        df.rename(columns=mapping_eg, inplace=True)
+                        if 'Date_Time_Raw' in df.columns:
+                            split_dt = df['Date_Time_Raw'].astype(str).str.split(r'\s+', n=1, expand=True)
+                            df.insert(0, 'Time', split_dt[1].fillna('00:00:00') if split_dt.shape[1] > 1 else '00:00:00')
+                            df.insert(0, 'Date', split_dt[0])
+                            df.drop(columns=['Date_Time_Raw'], inplace=True)
+                        list_df.append(df)
+                    elif fp.name.endswith('.csv'):
+                        df = pd.read_csv(fp)
+                        orig_col = df.columns[0]
+                        split_dt = df[orig_col].astype(str).str.split(r'\s+', n=1, expand=True)
+                        df.insert(0, 'Time', split_dt[1].fillna('00:00:00') if split_dt.shape[1] > 1 else '00:00:00')
+                        df.insert(0, 'Date', split_dt[0])
+                        df.drop(columns=[orig_col], inplace=True)
+                        list_df.append(df)
+                
+                df_all = pd.concat(list_df, ignore_index=True)
+                df_clean = EnginePerapihData.normalize_dataframe(df_all)
+                df_summary = EnginePerapihData.buat_rangkuman_per_sensor(df_clean, awos_labels)
+                excel_bytes = EnginePerapihData.simpan_ke_excel_bytes(df_clean, df_summary, "Data_AWOS_Clean")
+                
+                st.success("✅ Data AWOS Berhasil Diproses!")
+                st.download_button(
+                    label="⬇️ Download Excel AWOS Clean",
+                    data=excel_bytes,
+                    file_name="AWOS_Gabungan_Clean.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
+                st.dataframe(df_clean.head(100), use_container_width=True)
+
+# --- TAB 2: FDB TO CSV ---
+with tab_fdb:
+    st.subheader("Ekstrak Database Firebird AWS (.FDB) Kilat ke CSV")
+    fdb_file = st.file_uploader("Upload File Database Firebird (.FDB)", type=['fdb'], key="fdb_single")
+    
+    if st.button("⚡ Ekstrak Kilat ke CSV", key="btn_fdb"):
+        if not fdb_file:
+            st.error("Upload file .FDB terlebih dahulu!")
+        else:
+            with st.spinner("Mengekstrak tabel database FDB..."):
+                kolom_aws = ['Date', 'Time', 'S', 'DD', 'FF', 'DM10', 'FM10', 'DD2', 'FF2', 'DVN', 'DVX', 'FVN', 'FVX', 'RR', 'RH', 'TSV', 'DP', 'T', 'GLOR', 'GLORP', 'INSD', 'STAP', 'MSLP', 'GNDT']
+                df_fdb = EnginePerapihData.baca_database_fdb(fdb_file, kolom_aws)
+                df_clean = EnginePerapihData.normalize_dataframe(df_fdb)
                 
-                if PYPDF_INSTALLED and pdf_kalibrasi is not None:
-                    merger = PdfWriter()
-                    base_path = extra_path = final_path = None
-                    try:
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f_base:
-                            f_base.write(pdf_bytes)
-                            base_path = f_base.name
+                csv_bytes = df_clean.to_csv(index=False).encode('utf-8')
+                st.success("⚡ Ekstraksi FDB Selesai!")
+                st.download_button(
+                    label="⬇️ Download Hasil CSV",
+                    data=csv_bytes,
+                    file_name="AWS_Ekstrak_FDB.csv",
+                    mime="text/csv"
+                )
+                st.dataframe(df_clean.head(100), use_container_width=True)
 
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f_extra:
-                            f_extra.write(pdf_kalibrasi.getbuffer())
-                            extra_path = f_extra.name
+# --- TAB 3: AWS MULTI-FORMAT ---
+with tab_aws:
+    st.subheader("Pengolahan Data AWS Multi-Format (.XLSX / .CSV / .TXT / .FDB)")
+    aws_labels = {
+        'DD': 'Arah Angin', 'FF': 'Kecepatan Angin', 'RR': 'Curah Hujan',
+        'RH': 'Kelembaban', 'DP': 'Titik Embun', 'T': 'Suhu Udara',
+        'STAP': 'Tekanan Stasiun', 'GNDT': 'Suhu Tanah'
+    }
+    kolom_aws_resmi = ['Date', 'Time', 'S', 'DD', 'FF', 'DM10', 'FM10', 'DD2', 'FF2', 'DVN', 'DVX', 'FVN', 'FVX', 'RR', 'RH', 'TSV', 'DP', 'T', 'GLOR', 'GLORP', 'INSD', 'STAP', 'MSLP', 'GNDT']
+    
+    excel_lama_aws = st.file_uploader(" (Opsional) Gabungkan dengan File Excel AWS Lama", type=['xlsx'], key="aws_old")
+    files_aws = st.file_uploader("Upload File Mentah AWS (Format Text/Excel/CSV/FDB)", type=['xlsx', 'xls', 'csv', 'txt', 'fdb'], accept_multiple_files=True, key="aws_new")
+    
+    if st.button("Proses Data AWS 🚀", key="btn_aws"):
+        if not files_aws and not excel_lama_aws:
+            st.error("Silakan upload minimal satu file AWS!")
+        else:
+            with st.spinner("Memproses & Merekonstruksi Data AWS..."):
+                list_df = []
+                if excel_lama_aws:
+                    list_df.append(pd.read_excel(excel_lama_aws, sheet_name="Data_AWS_Clean"))
+                
+                for fp in files_aws:
+                    ext = fp.name.lower()
+                    if ext.endswith('.fdb'):
+                        df_fdb = EnginePerapihData.baca_database_fdb(fp, kolom_aws_resmi)
+                        if not df_fdb.empty: list_df.append(df_fdb)
+                    elif ext.endswith('.csv'):
+                        list_df.append(pd.read_csv(fp))
+                    elif ext.endswith(('.xlsx', '.xls')):
+                        df_ex = pd.read_excel(fp)
+                        if len(df_ex.columns) == 1:
+                            lines = df_ex.iloc[:, 0].dropna().astype(str).tolist()
+                            data_rows = EnginePerapihData.parse_text_lines(lines, kolom_aws_resmi)
+                            if data_rows: list_df.append(pd.DataFrame(data_rows, columns=kolom_aws_resmi))
+                        else: list_df.append(df_ex)
+                    else:
+                        lines = fp.getvalue().decode('utf-8', errors='ignore').splitlines()
+                        data_rows = EnginePerapihData.parse_text_lines(lines, kolom_aws_resmi)
+                        if data_rows: list_df.append(pd.DataFrame(data_rows, columns=kolom_aws_resmi))
+                
+                df_all = pd.concat(list_df, ignore_index=True)
+                df_clean = EnginePerapihData.normalize_dataframe(df_all)
+                df_summary = EnginePerapihData.buat_rangkuman_per_sensor(df_clean, aws_labels)
+                excel_bytes = EnginePerapihData.simpan_ke_excel_bytes(df_clean, df_summary, "Data_AWS_Clean")
+                
+                st.success("✅ Data AWS Berhasil Diproses!")
+                st.download_button(
+                    label="⬇️ Download Excel AWS Clean",
+                    data=excel_bytes,
+                    file_name="AWS_Gabungan_Clean.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+                st.dataframe(df_clean.head(100), use_container_width=True)
 
-                        merger.append(base_path)
-                        merger.append(extra_path)
-                        
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f_out:
-                            merger.write(f_out)
-                            final_path = f_out.name
-
-                        with open(final_path, "rb") as f_final:
-                            output_data = f_final.read()
-                    finally:
-                        for p in [base_path, extra_path, final_path]:
-                            if p and os.path.exists(p):
-                                try:
-                                    os.remove(p)
-                                except Exception:
-                                    pass
-                else:
-                    output_data = pdf_bytes
-
-            filename = f"E_Kinerja_{filter_nama.replace(' ', '_')}_{jenis_laporan}_{filter_tahun}.pdf"
-            st.success("✅ Dokumen PDF E-Kinerja Lengkap berhasil dibuat!")
-            st.download_button(
-                label="⬇️ Download Hasil PDF E-Kinerja",
-                data=output_data,
-                file_name=filename,
-                mime="application/pdf"
-            )
+# --- TAB 4: INFO SISTEM ---
+with tab_info:
+    st.markdown("""
+    ### 📌 Fitur Utama Sistem Refactored (Streamlit Version)
+    
+    1. **Format Tanggal Standar ISO (`YYYY-MM-DD`)**: Mencegah timbulnya `DataFormat.Error` atau konflik *locale* saat diimpor ke **Power BI Desktop**[cite: 1, 2].
+    2. **Kontinuitas Waktu Kontinu (1-Min Resampling)**: Memunculkan baris waktu yang hilang (*missing time gaps*) secara teratur agar grafik *time-series* tidak meloncat.
+    3. **Quality Control (QC) Fisik**: Otomatis menyaring dan membuang outlier/anomali nilai ekstrem fisik meteorologi.
+    4. **In-Memory Download**: Seluruh proses ekspor dikemas dalam memori (`io.BytesIO`) tanpa mengotori folder server web[cite: 2].
+    """)
+    
+    if st.button("♻️ Bersihkan Memori Server (RAM)"):
+        freed = gc.collect()
+        st.info(f"RAM berhasil dibersihkan! ({freed} objek dibuang).")
