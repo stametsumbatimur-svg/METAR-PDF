@@ -12,7 +12,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # --- KONFIGURASI HALAMAN STREAMLIT ---
 st.set_page_config(
-    page_title="Pengolah Data ALOPTAMA Pro",
+    page_title="Pengolah Data ALOPTAMA",
     page_icon="🌤️",
     layout="wide"
 )
@@ -174,6 +174,9 @@ class EnginePerapihData:
             
         return summary_df
 
+    # ==============================================================
+    # PENAMBAHAN FITUR: FORMATTING LENGKAP EXCEL SAMA DENGAN DESKTOP
+    # ==============================================================
     @staticmethod
     def simpan_ke_excel_bytes(df_data, df_summary, data_sheet_name):
         output = io.BytesIO()
@@ -184,54 +187,102 @@ class EnginePerapihData:
             font_header = Font(name='Arial', size=11, bold=True, color='FFFFFF')
             fill_header = PatternFill(start_color='1F4E78', end_color='1F4E78', fill_type='solid')
             align_header = Alignment(horizontal='center', vertical='center', wrap_text=True)
+            
             font_data = Font(name='Arial', size=10)
             fill_zebra = PatternFill(start_color='F2F5F9', end_color='F2F5F9', fill_type='solid')
             align_center = Alignment(horizontal='center', vertical='center')
             align_left = Alignment(horizontal='left', vertical='center')
+            
             font_total = Font(name='Arial', size=11, bold=True, color='000000')
             fill_total = PatternFill(start_color='D9E1F2', end_color='D9E1F2', fill_type='solid')
+            
             side_thin = Side(style='thin', color='D9D9D9')
             border_thin = Border(left=side_thin, right=side_thin, top=side_thin, bottom=side_thin)
             border_total = Border(left=side_thin, right=side_thin, top=side_thin, bottom=Side(style='double', color='000000'))
 
+            # --- 1. FORMATTING SHEET DATA UTAMA ---
             ws_data = writer.sheets[data_sheet_name]
             ws_data.freeze_panes = 'A2'
             ws_data.auto_filter.ref = ws_data.dimensions
+            ws_data.row_dimensions[1].height = 28
             
+            # Format Header
             for cell in ws_data[1]:
                 cell.font = font_header
                 cell.fill = fill_header
                 cell.alignment = align_header
                 cell.border = border_thin
 
+            # Format Sel Data & Zebra Striping
+            max_row_data = ws_data.max_row
+            max_col_data = ws_data.max_column
+            for r_idx, row in enumerate(ws_data.iter_rows(min_row=2, max_row=max_row_data, max_col=max_col_data), start=2):
+                ws_data.row_dimensions[r_idx].height = 20
+                for c_idx, cell in enumerate(row, start=1):
+                    cell.font = font_data
+                    cell.border = border_thin
+                    if r_idx % 2 == 0:
+                        cell.fill = fill_zebra
+                    cell.alignment = align_center
+
+            # Hitung Otomatis Lebar Kolom (Auto-Fit Column Width)
+            df_sample = df_data.head(500)
+            for idx, col in enumerate(df_data.columns, 1):
+                max_val_len = df_sample[col].fillna('').astype(str).str.len().max()
+                max_len = max(int(max_val_len) if pd.notna(max_val_len) else 0, len(str(col)))
+                col_letter = get_column_letter(idx)
+                ws_data.column_dimensions[col_letter].width = max(max_len + 4, 14)
+
+            # --- 2. FORMATTING SHEET RANGKUMAN ---
             ws_sum = writer.sheets["Rangkuman_Ketersediaan"]
             ws_sum.freeze_panes = 'A2'
             if not df_summary.empty:
                 ws_sum.auto_filter.ref = ws_sum.dimensions
-                
+            ws_sum.row_dimensions[1].height = 28
+            
             max_row_sum = ws_sum.max_row
             max_col_sum = ws_sum.max_column
             
             for r_idx, row in enumerate(ws_sum.iter_rows(min_row=1, max_row=max_row_sum, max_col=max_col_sum), start=1):
                 is_total_row = (r_idx == max_row_sum) and (max_row_sum > 1)
+                if r_idx > 1 and not is_total_row:
+                    ws_sum.row_dimensions[r_idx].height = 20
+                elif is_total_row:
+                    ws_sum.row_dimensions[r_idx].height = 24
+
                 for c_idx, cell in enumerate(row, start=1):
                     if r_idx == 1:
-                        cell.font, cell.fill, cell.alignment, cell.border = font_header, fill_header, align_header, border_thin
+                        cell.font = font_header
+                        cell.fill = fill_header
+                        cell.alignment = align_header
+                        cell.border = border_thin
                     elif is_total_row:
-                        cell.font, cell.fill, cell.border = font_total, fill_total, border_total
+                        cell.font = font_total
+                        cell.fill = fill_total
+                        cell.border = border_total
                         cell.alignment = align_left if c_idx == 1 else align_center
-                        if c_idx > 2: cell.number_format = '0.00"%"'
+                        if c_idx > 2:
+                            cell.number_format = '0.00"%"'
                     else:
-                        cell.font, cell.border = font_data, border_thin
-                        if r_idx % 2 == 0: cell.fill = fill_zebra
+                        cell.font = font_data
+                        cell.border = border_thin
+                        if r_idx % 2 == 0:
+                            cell.fill = fill_zebra
                         cell.alignment = align_left if c_idx == 1 else align_center
-                        if c_idx > 2: cell.number_format = '0.00"%"'
+                        if c_idx > 2:
+                            cell.number_format = '0.00"%"'
+
+            for idx, col in enumerate(df_summary.columns, 1):
+                max_len = max(df_summary[col].astype(str).str.len().max(), len(str(col))) if not df_summary.empty else len(str(col))
+                if idx > 2:
+                    max_len += 5
+                col_letter = get_column_letter(idx)
+                ws_sum.column_dimensions[col_letter].width = max(max_len + 4, 15)
 
         return output.getvalue()
 
     @classmethod
     def baca_database_fdb(cls, fdb_file, kolom_aws_resmi):
-        # Menyimpan berkas sementara untuk koneksi driver Firebird
         with tempfile.NamedTemporaryFile(delete=False, suffix=".fdb") as tmp:
             tmp.write(fdb_file.getbuffer())
             tmp_path = tmp.name
@@ -258,7 +309,6 @@ class EnginePerapihData:
                     cursor.execute(f'SELECT * FROM "{target_table}"')
                     df_tbl = pd.DataFrame(cursor.fetchall(), columns=[f[0] for f in cursor.description])
                     if not df_tbl.empty:
-                        # Parsing sederhana
                         df_mapped = pd.DataFrame(index=df_tbl.index)
                         dt_col = next((c for c in df_tbl.columns if c.upper() in ['DATACQ', 'DATETIME', 'DATE_TIME', 'DATE']), None)
                         if dt_col:
@@ -282,14 +332,14 @@ class EnginePerapihData:
 
 
 # --- INTERFASE PENGGUNA (STREAMLIT UI) ---
-st.title("🌤️ Pengolah Data ALOPTAMA Meteorologi")
-st.caption("Aplikasi Rekapitulasikan & Normalisasi Data AWOS & AWS (Power BI Ready) - By Luqmanul Hakim, S.Tr")
+st.title("🌤️ Pengolah Data ALOPTAMA")
+st.caption("Aplikasi Rekapitulasikan Data AWOS & AWS Strengthening - By Luqmanul Hakim, S.Tr")
 
 tab_awos, tab_fdb, tab_aws, tab_info = st.tabs([
     "1. 📊 Panel AWOS", 
     "2. ⚡ Ekstrak FDB ke CSV", 
-    "3. 🛰️ Panel AWS", 
-    "4. ℹ️ Informasi Sistem"
+    "3. 🛰️ Panel AWS Strengthening", 
+    "4. ℹ️ Refresh Sistem"
 ])
 
 # --- TAB 1: AWOS ---
@@ -436,14 +486,6 @@ with tab_aws:
 
 # --- TAB 4: INFO SISTEM ---
 with tab_info:
-    st.markdown("""
-    ### 📌 Fitur Utama Sistem Refactored (Streamlit Version)
-    
-    1. **Format Tanggal Standar ISO (`YYYY-MM-DD`)**: Mencegah timbulnya `DataFormat.Error` atau konflik *locale* saat diimpor ke **Power BI Desktop**[cite: 1, 2].
-    2. **Kontinuitas Waktu Kontinu (1-Min Resampling)**: Memunculkan baris waktu yang hilang (*missing time gaps*) secara teratur agar grafik *time-series* tidak meloncat.
-    3. **Quality Control (QC) Fisik**: Otomatis menyaring dan membuang outlier/anomali nilai ekstrem fisik meteorologi.
-    4. **In-Memory Download**: Seluruh proses ekspor dikemas dalam memori (`io.BytesIO`) tanpa mengotori folder server web[cite: 2].
-    """)
     
     if st.button("♻️ Bersihkan Memori Server (RAM)"):
         freed = gc.collect()
