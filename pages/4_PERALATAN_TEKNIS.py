@@ -22,9 +22,9 @@ class EnginePerapihData:
         combined = date_series.astype(str).str.strip() + ' ' + time_series.astype(str).str.strip()
         return pd.to_datetime(combined, format='mixed', dayfirst=True, errors='coerce')
 
-    @classmethod
+    @staticmethod
     @st.cache_data(show_spinner=False)
-    def normalize_dataframe(cls, df):
+    def normalize_dataframe(df):
         if df is None or df.empty or 'Date' not in df.columns or 'Time' not in df.columns:
             return df
 
@@ -34,7 +34,7 @@ class EnginePerapihData:
         df_clean = df[valid_mask].copy()
 
         # Parse & urutkan Waktu
-        df_clean['datetime_temp'] = cls.smart_parse_datetime(df_clean['Date'], df_clean['Time'])
+        df_clean['datetime_temp'] = EnginePerapihData.smart_parse_datetime(df_clean['Date'], df_clean['Time'])
         df_clean.dropna(subset=['datetime_temp'], inplace=True)
         df_clean.drop_duplicates(subset=['datetime_temp'], inplace=True)
         df_clean.set_index('datetime_temp', inplace=True)
@@ -48,8 +48,11 @@ class EnginePerapihData:
         df_clean['Date'] = df_clean['datetime_temp'].dt.strftime('%Y-%m-%d')
         df_clean['Time'] = df_clean['datetime_temp'].dt.strftime('%H:%M:00')
 
-        # Type Casting Numerik Tervektorisasi (Tanpa Regex Lambat)
-        cols_to_exclude = {'Date', 'Time', 'datetime_temp', 'Date_Time_Raw', 'S'}
+        # Generate Primary Key untuk Power BI (Format YYYYMMDDHHMM)
+        df_clean['PK_Datetime'] = df_clean['datetime_temp'].dt.strftime('%Y%m%d%H%M').astype('int64')
+
+        # Type Casting Numerik Tervektorisasi
+        cols_to_exclude = {'PK_Datetime', 'Date', 'Time', 'datetime_temp', 'Date_Time_Raw', 'S'}
         target_cols = [c for c in df_clean.columns if c not in cols_to_exclude]
         for col in target_cols:
             df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
@@ -67,7 +70,7 @@ class EnginePerapihData:
                 if col in df_clean.columns:
                     df_clean.loc[(df_clean[col] < vmin) | (df_clean[col] > vmax), col] = np.nan
 
-        # Kalkulasi Titik Embun (Dew Point / $DP$)
+        # Kalkulasi Titik Embun (Dew Point / DP)
         t_col = 'T' if 'T' in df_clean.columns else ('Air Tmp (C) 33' if 'Air Tmp (C) 33' in df_clean.columns else None)
         rh_col = 'RH' if 'RH' in df_clean.columns else ('RH (%) 33' if 'RH (%) 33' in df_clean.columns else None)
         dp_col = 'DP' if 'DP' in df_clean.columns else ('Dew Pt (C) 33' if 'Dew Pt (C) 33' in df_clean.columns else 'DP')
@@ -85,7 +88,10 @@ class EnginePerapihData:
             df_clean.loc[missing_dp & valid_trh, dp_col] = dp_calc[missing_dp & valid_trh]
 
         df_clean.drop(columns=['datetime_temp'], inplace=True, errors='ignore')
-        return df_clean
+
+        # Reorder Kolom: Pindahkan PK_Datetime ke paling depan
+        cols = ['PK_Datetime'] + [c for c in df_clean.columns if c != 'PK_Datetime']
+        return df_clean[cols]
 
     @staticmethod
     def parse_text_lines(lines, kolom_aws_resmi):
