@@ -403,7 +403,6 @@ with tab_awos:
                     file_name="AWOS_Gabungan_Clean.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
-                st.dataframe(df_clean.head(100), use_container_width=True)
 
 # --- TAB 2: FDB TO CSV ---
 with tab_fdb:
@@ -427,7 +426,6 @@ with tab_fdb:
                     file_name="AWS_Ekstrak_FDB.csv",
                     mime="text/csv"
                 )
-                st.dataframe(df_clean.head(100), use_container_width=True)
 
 # --- TAB 3: AWS MULTI-FORMAT ---
 with tab_aws:
@@ -482,7 +480,6 @@ with tab_aws:
                     file_name="AWS_Gabungan_Clean.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
-                st.dataframe(df_clean.head(100), use_container_width=True)
 
 # --- TAB 4: INFO SISTEM ---
 with tab_info:
