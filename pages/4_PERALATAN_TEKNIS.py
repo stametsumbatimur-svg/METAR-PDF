@@ -1,5 +1,6 @@
 import os
 import io
+import re
 import tempfile
 import numpy as np
 import pandas as pd
@@ -14,7 +15,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- ENGINE OLAH DATA & HELPER ---
+# --- ENGINE OLAH DATA & HELPER UNIVERSAL ---
 class EnginePerapihData:
     
     KOLOM_AWS_RESMI = [
@@ -23,19 +24,46 @@ class EnginePerapihData:
         'GLOR', 'GLORP', 'INSD', 'STAP', 'MSLP', 'GNDT'
     ]
 
-    AWOS_LABELS = {
-        'Air Tmp (C) 33': 'Suhu Udara', 'Dew Pt (C) 33': 'Titik Embun',
-        'RH (%) 33': 'Kelembaban', 'QFE (hPa) 33': 'Tekanan QFE',
-        'QNH (hPa) 33': 'Tekanan QNH', 'WS (kt) 33': 'Kecepatan Angin',
-        'Mag WD (deg) 33': 'Arah Angin', 'Solar Rad (W/m^2) 33': 'Radiasi Matahari',
-        'Precip 1Hr (mm) 33': 'Curah Hujan'
+    UNIVERSAL_LABELS = {
+        'Air_Temp': 'Suhu Udara',
+        'Dew_Point': 'Titik Embun',
+        'RH': 'Kelembaban Udara',
+        'QFE': 'Tekanan QFE',
+        'QNH': 'Tekanan QNH',
+        'Wind_Speed': 'Kecepatan Angin',
+        'Wind_Dir': 'Arah Angin',
+        'Solar_Rad': 'Radiasi Matahari',
+        'Precip_1Hr': 'Curah Hujan',
+        'Ground_Temp': 'Suhu Tanah'
     }
 
-    AWS_LABELS = {
-        'DD': 'Arah Angin', 'FF': 'Kecepatan Angin', 'RR': 'Curah Hujan',
-        'RH': 'Kelembaban', 'DP': 'Titik Embun', 'T': 'Suhu Udara',
-        'STAP': 'Tekanan Stasiun', 'GNDT': 'Suhu Tanah'
-    }
+    @staticmethod
+    def standardize_columns(df):
+        """Memetakan nama kolom mentah (AWOS/AWS/Runway manapun) ke nama universal."""
+        rename_dict = {}
+        for c in df.columns:
+            str_c = str(c).strip()
+            if re.search(r'air\s*temp|airtemperaturevalidated|^\s*T\s*$', str_c, re.I):
+                rename_dict[c] = 'Air_Temp'
+            elif re.search(r'dew\s*pt|dewpointvalidated|^\s*DP\s*$', str_c, re.I):
+                rename_dict[c] = 'Dew_Point'
+            elif re.search(r'relativehumidity|^\s*RH\s*(\(%\))?', str_c, re.I):
+                rename_dict[c] = 'RH'
+            elif re.search(r'windspeedselected|^\s*WS\s*(\(kt\))?(\s*\d+)?$|^\s*FF\s*$', str_c, re.I):
+                rename_dict[c] = 'Wind_Speed'
+            elif re.search(r'winddirection|^\s*mag\s*wd|^\s*wd|^\s*DD\s*$', str_c, re.I):
+                rename_dict[c] = 'Wind_Dir'
+            elif re.search(r'qfe|^\s*STAP\s*$', str_c, re.I):
+                rename_dict[c] = 'QFE'
+            elif re.search(r'qnh', str_c, re.I):
+                rename_dict[c] = 'QNH'
+            elif re.search(r'solarradiation|solar\s*rad|GLOR', str_c, re.I):
+                rename_dict[c] = 'Solar_Rad'
+            elif re.search(r'precip|^\s*RR\s*$', str_c, re.I):
+                rename_dict[c] = 'Precip_1Hr'
+            elif re.search(r'ground\s*temp|^\s*GNDT\s*$', str_c, re.I):
+                rename_dict[c] = 'Ground_Temp'
+        return df.rename(columns=rename_dict)
 
     @staticmethod
     def smart_parse_datetime(date_series, time_series):
@@ -44,16 +72,8 @@ class EnginePerapihData:
         return dt_parsed.dt.tz_localize('UTC', ambiguous='NaT', nonexistent='NaT')
 
     @classmethod
-    def load_files_to_dataframe(cls, uploaded_files, is_awos=False):
+    def load_files_to_dataframe(cls, uploaded_files):
         list_df = []
-        awos_mapping = {
-            'Date and Time': 'Date_Time_Raw', 'airTemperatureValidated.RWYA': 'Air Tmp (C) 33',
-            'dewPointValidated.RWYA': 'Dew Pt (C) 33', 'relativeHumidityValidated.RWYA': 'RH (%) 33',
-            'QFE.RWYA': 'QFE (hPa) 33', 'QNH.RWYA': 'QNH (hPa) 33', 'windSpeedSelected.RWYA': 'WS (kt) 33',
-            'instant.windDirection.RWYA': 'Mag WD (deg) 33', 'solarRadiation.RWYA': 'Solar Rad (W/m^2) 33',
-            'oneHour.precipSelected.RWYA': 'Precip 1Hr (mm) 33'
-        }
-        
         for fp in uploaded_files:
             ext = fp.name.lower()
             if ext.endswith('.fdb'):
@@ -62,14 +82,13 @@ class EnginePerapihData:
                     list_df.append(df_fdb)
             elif ext.endswith(('.xlsx', '.xls')):
                 df_ex = pd.read_excel(fp)
-                if is_awos:
-                    df_ex.rename(columns=awos_mapping, inplace=True)
-                
                 if len(df_ex.columns) == 1:
                     lines = df_ex.iloc[:, 0].dropna().astype(str).tolist()
                     rows = cls.parse_text_lines(lines, cls.KOLOM_AWS_RESMI)
                     if rows: list_df.append(pd.DataFrame(rows, columns=cls.KOLOM_AWS_RESMI))
                 else:
+                    if 'Date and Time' in df_ex.columns:
+                        df_ex.rename(columns={'Date and Time': 'Date_Time_Raw'}, inplace=True)
                     if 'Date_Time_Raw' in df_ex.columns:
                         split_dt = df_ex['Date_Time_Raw'].astype(str).str.split(r'\s+', n=1, expand=True)
                         df_ex.insert(0, 'Time', split_dt[1].fillna('00:00:00') if split_dt.shape[1] > 1 else '00:00:00')
@@ -102,6 +121,9 @@ class EnginePerapihData:
         valid_mask = df['Date'].notna() & date_str.ne('') & date_str.str.lower().ne('nan')
         df_clean = df[valid_mask].copy()
 
+        # Normalisasi Nama Kolom Universal
+        df_clean = EnginePerapihData.standardize_columns(df_clean)
+
         # UTC Datetime Processing
         df_clean['datetime_temp'] = EnginePerapihData.smart_parse_datetime(df_clean['Date'], df_clean['Time'])
         df_clean.dropna(subset=['datetime_temp'], inplace=True)
@@ -116,7 +138,7 @@ class EnginePerapihData:
         df_clean['Date'] = df_clean['datetime_temp'].dt.strftime('%Y-%m-%d')
         df_clean['Time'] = df_clean['datetime_temp'].dt.strftime('%H:%M:00')
 
-        # Power BI Foreign Keys (UTC Basis)
+        # Keys Power BI (UTC Basis)
         df_clean['PK_Datetime'] = df_clean['datetime_temp'].dt.strftime('%Y%m%d%H%M').astype('int64')
         df_clean['DateKey'] = df_clean['datetime_temp'].dt.strftime('%Y%m%d').astype('int64')
         df_clean['TimeKey'] = df_clean['datetime_temp'].dt.strftime('%H%M').astype('int64')
@@ -126,36 +148,32 @@ class EnginePerapihData:
         for col in target_cols:
             df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
 
-        # QC Physical Limits Check (Termasuk Suhu Tanah / GNDT)
+        # QC Limits Check Universal
         qc_limits = {
-            ('T', 'Air Tmp (C) 33'): (-50, 60),
-            ('RH', 'RH (%) 33'): (0, 100),
-            ('DD', 'Mag WD (deg) 33'): (0, 360),
-            ('FF', 'WS (kt) 33'): (0, 150),
-            ('STAP', 'MSLP', 'QFE (hPa) 33', 'QNH (hPa) 33'): (600, 1150),
-            ('GNDT',): (-10, 70)
+            'Air_Temp': (-50, 60),
+            'RH': (0, 100),
+            'Wind_Dir': (0, 360),
+            'Wind_Speed': (0, 150),
+            'QFE': (600, 1150),
+            'QNH': (600, 1150),
+            'Ground_Temp': (-10, 70)
         }
-        for cols, (vmin, vmax) in qc_limits.items():
-            for col in cols:
-                if col in df_clean.columns:
-                    df_clean.loc[(df_clean[col] < vmin) | (df_clean[col] > vmax), col] = np.nan
+        for col, (vmin, vmax) in qc_limits.items():
+            if col in df_clean.columns:
+                df_clean.loc[(df_clean[col] < vmin) | (df_clean[col] > vmax), col] = np.nan
 
         # Dew Point Calculation
-        t_col = 'T' if 'T' in df_clean.columns else ('Air Tmp (C) 33' if 'Air Tmp (C) 33' in df_clean.columns else None)
-        rh_col = 'RH' if 'RH' in df_clean.columns else ('RH (%) 33' if 'RH (%) 33' in df_clean.columns else None)
-        dp_col = 'DP' if 'DP' in df_clean.columns else ('Dew Pt (C) 33' if 'Dew Pt (C) 33' in df_clean.columns else 'DP')
-
-        if t_col and rh_col:
-            valid_trh = df_clean[t_col].notna() & df_clean[rh_col].notna()
+        if 'Air_Temp' in df_clean.columns and 'RH' in df_clean.columns:
+            valid_trh = df_clean['Air_Temp'].notna() & df_clean['RH'].notna()
             a, b = 17.27, 237.7
-            alpha = ((a * df_clean[t_col]) / (b + df_clean[t_col])) + np.log(np.maximum(df_clean[rh_col], 1e-5) / 100.0)
+            alpha = ((a * df_clean['Air_Temp']) / (b + df_clean['Air_Temp'])) + np.log(np.maximum(df_clean['RH'], 1e-5) / 100.0)
             dp_calc = ((b * alpha) / (a - alpha)).round(1)
             
-            if dp_col not in df_clean.columns:
-                df_clean[dp_col] = np.nan
+            if 'Dew_Point' not in df_clean.columns:
+                df_clean['Dew_Point'] = np.nan
                 
-            missing_dp = df_clean[dp_col].isna()
-            df_clean.loc[missing_dp & valid_trh, dp_col] = dp_calc[missing_dp & valid_trh]
+            missing_dp = df_clean['Dew_Point'].isna()
+            df_clean.loc[missing_dp & valid_trh, 'Dew_Point'] = dp_calc[missing_dp & valid_trh]
 
         df_clean.drop(columns=['datetime_temp'], inplace=True, errors='ignore')
         return df_clean
@@ -182,7 +200,6 @@ class EnginePerapihData:
 
     @staticmethod
     def generate_dim_time():
-        # UTC + WITA (UTC+8) Dual Timezone Matrix
         utc_range = pd.date_range('2000-01-01 00:00', '2000-01-01 23:59', freq='1min')
         wita_range = utc_range + pd.Timedelta(hours=8)
         
@@ -203,12 +220,9 @@ class EnginePerapihData:
     @staticmethod
     def generate_dim_sensor(sensor_labels):
         qc_limits = {
-            'T': (-50, 60), 'Air Tmp (C) 33': (-50, 60),
-            'RH': (0, 100), 'RH (%) 33': (0, 100),
-            'DD': (0, 360), 'Mag WD (deg) 33': (0, 360),
-            'FF': (0, 150), 'WS (kt) 33': (0, 150),
-            'STAP': (600, 1150), 'MSLP': (600, 1150), 'QFE (hPa) 33': (600, 1150), 'QNH (hPa) 33': (600, 1150),
-            'GNDT': (-10, 70)
+            'Air_Temp': (-50, 60), 'Dew_Point': (-50, 60),
+            'RH': (0, 100), 'Wind_Dir': (0, 360), 'Wind_Speed': (0, 150),
+            'QFE': (600, 1150), 'QNH': (600, 1150), 'Ground_Temp': (-10, 70)
         }
         rows = [
             {
@@ -301,12 +315,11 @@ class EnginePerapihData:
     def simpan_ke_excel_bytes(df_data, df_summary, data_sheet_name, sensor_labels):
         output = io.BytesIO()
         
-        # Power BI Dim Table Generators
         dim_date = EnginePerapihData.generate_dim_date(df_data)
         dim_time = EnginePerapihData.generate_dim_time()
         dim_sensor = EnginePerapihData.generate_dim_sensor(sensor_labels)
 
-        # Hapus kolom string Date/Time pada Fact Table untuk efisiensi VertiPaq Engine
+        # Drop kolom string Date/Time pada Fact Table untuk efisiensi VertiPaq Power BI
         fact_df = df_data.drop(columns=['Date', 'Time'], errors='ignore')
         key_cols = ['PK_Datetime', 'DateKey', 'TimeKey']
         other_cols = [c for c in fact_df.columns if c not in key_cols]
@@ -319,7 +332,6 @@ class EnginePerapihData:
             dim_time.to_excel(writer, index=False, sheet_name="Dim_Time")
             dim_sensor.to_excel(writer, index=False, sheet_name="Dim_Sensor")
             
-            # Excel Formatting Styles
             font_header = Font(name='Arial', size=11, bold=True, color='FFFFFF')
             fill_header = PatternFill(start_color='1F4E78', end_color='1F4E78', fill_type='solid')
             align_header = Alignment(horizontal='center', vertical='center', wrap_text=True)
@@ -410,12 +422,12 @@ st.title("🌤️ Pengolah Data ALOPTAMA")
 st.caption("Aplikasi Rekapitulasikan Data AWOS & AWS Strengthening - By Luqmanul Hakim, S.Tr")
 
 tab_awos, tab_fdb, tab_aws = st.tabs([
-    "1. 📊 Panel AWOS", 
+    "1. 📊 Panel AWOS Universal", 
     "2. ⚡ Ekstrak FDB ke CSV", 
     "3. 🛰️ Panel AWS Strengthening"
 ])
 
-# --- TAB 1: AWOS ---
+# --- TAB 1: AWOS UNIVERSAL ---
 with tab_awos:
     st.subheader("Pengolahan Data AWOS (.CSV / .XLSX)")
     files_awos = st.file_uploader("Upload File Mentah AWOS", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True, key="awos_new")
@@ -424,15 +436,15 @@ with tab_awos:
         if not files_awos:
             st.error("Silakan upload minimal satu file AWOS!")
         else:
-            with st.spinner("Memproses, Menyelaraskan UTC, & QC AWOS..."):
-                df_all = EnginePerapihData.load_files_to_dataframe(files_awos, is_awos=True)
+            with st.spinner("Sedang diproses..."):
+                df_all = EnginePerapihData.load_files_to_dataframe(files_awos)
                 df_clean = EnginePerapihData.normalize_dataframe(df_all)
-                df_summary = EnginePerapihData.buat_rangkuman_per_sensor(df_clean, EnginePerapihData.AWOS_LABELS)
+                df_summary = EnginePerapihData.buat_rangkuman_per_sensor(df_clean, EnginePerapihData.UNIVERSAL_LABELS)
                 excel_bytes = EnginePerapihData.simpan_ke_excel_bytes(
-                    df_clean, df_summary, "Fact_AWOS_Data", EnginePerapihData.AWOS_LABELS
+                    df_clean, df_summary, "Fact_AWOS_Data", EnginePerapihData.UNIVERSAL_LABELS
                 )
                 
-                st.success("✅ Data AWOS Berhasil Diproses dengan Model Power BI!")
+                st.success("✅ Data AWOS Berhasil Diproses!")
                 st.download_button(
                     label="⬇️ Download Excel AWOS",
                     data=excel_bytes,
@@ -464,22 +476,22 @@ with tab_fdb:
 
 # --- TAB 3: AWS MULTI-FORMAT ---
 with tab_aws:
-    st.subheader("Pengolahan Data AWS (.XLSX / .CSV / .TXT / .FDB)")
-    files_aws = st.file_uploader("Upload File Mentah AWS", type=['xlsx', 'xls', 'csv', 'txt', 'fdb'], accept_multiple_files=True, key="aws_new")
+    st.subheader("Pengolahan Data AWS Multi-Format (.XLSX / .CSV / .TXT / .FDB)")
+    files_aws = st.file_uploader("Upload File Mentah AWS (Text/Excel/CSV/FDB)", type=['xlsx', 'xls', 'csv', 'txt', 'fdb'], accept_multiple_files=True, key="aws_new")
     
     if st.button("Proses Data AWS 🚀", key="btn_aws"):
         if not files_aws:
             st.error("Silakan upload minimal satu file AWS!")
         else:
-            with st.spinner("Memproses & Merekonstruksi Data AWS (UTC)..."):
-                df_all = EnginePerapihData.load_files_to_dataframe(files_aws, is_awos=False)
+            with st.spinner("Sedang diproses..."):
+                df_all = EnginePerapihData.load_files_to_dataframe(files_aws)
                 df_clean = EnginePerapihData.normalize_dataframe(df_all)
-                df_summary = EnginePerapihData.buat_rangkuman_per_sensor(df_clean, EnginePerapihData.AWS_LABELS)
+                df_summary = EnginePerapihData.buat_rangkuman_per_sensor(df_clean, EnginePerapihData.UNIVERSAL_LABELS)
                 excel_bytes = EnginePerapihData.simpan_ke_excel_bytes(
-                    df_clean, df_summary, "Fact_AWS_Data", EnginePerapihData.AWS_LABELS
+                    df_clean, df_summary, "Fact_AWS_Data", EnginePerapihData.UNIVERSAL_LABELS
                 )
                 
-                st.success("✅ Data AWS Berhasil Diproses dengan Model Power BI!")
+                st.success("✅ Data AWS Berhasil Diproses!")
                 st.download_button(
                     label="⬇️ Download Excel AWS",
                     data=excel_bytes,
