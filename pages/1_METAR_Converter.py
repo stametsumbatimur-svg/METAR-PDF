@@ -1368,9 +1368,9 @@ elif menu == "SPECI Converter":
                         
                         st.success(f"Berhasil memproses {len(df_clean)} data SPECI!")
                         
-                        DEFAULT_TEMPLATE_METAR = "TEMPLATE METAR_3.xlsx"
-                        if os.path.exists(DEFAULT_TEMPLATE_METAR) or os.path.exists("TEMPLATE METAR_2.xlsx") or os.path.exists("TEMPLATE METAR.xlsx"):
-                            excel_data = generate_excel_from_template_speci(df_clean, report_type="SPECI", template_path=DEFAULT_TEMPLATE_METAR, _path=_FILE)
+                        DEFAULT_TEMPLATE_METAR = "TEMPLATE METAR.xlsx"
+                        if os.path.exists(DEFAULT_TEMPLATE_METAR) or os.path.exists("TEMPLATE METAR_2.xlsx") or os.path.exists("TEMPLATE METAR_3.xlsx"):
+                            excel_data = generate_excel_from_template_speci(df_clean, report_type="SPECI", template_path=DEFAULT_TEMPLATE_METAR, logo_path=LOGO_FILE)
                         else:
                             st.warning(f"⚠️ File '{DEFAULT_TEMPLATE_METAR}' tidak ditemukan. Menggunakan format Excel standar.")
                             excel_data = generate_excel_bytes_metar_speci_fallback(df_clean, report_type="SPECI")
