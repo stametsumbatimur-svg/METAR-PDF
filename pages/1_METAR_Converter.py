@@ -37,7 +37,7 @@ def safe_set_cell(ws, row, col, value):
 def parse_metar_speci(sandi_str):
     if pd.isna(sandi_str):
         return None
-    sandi_str = sandi_str.replace('\n', ' ').replace('\r', '').strip()
+    sandi_str = str(sandi_str).replace('\n', ' ').replace('\r', '').strip()
     
     report_type = None
     if 'METAR' in sandi_str:
@@ -49,9 +49,32 @@ def parse_metar_speci(sandi_str):
         
     start_idx = sandi_str.find(report_type)
     core_str = sandi_str[start_idx:].replace('=', '').strip()
+    
+    # --- LOGIKA BARU: EKSTRAKSI RMK & TREND FORECAST SEBELUM TOKENISASI ---
+    rmk = "NOSIG"
+    if ' RMK' in core_str:
+        parts = core_str.split(' RMK', 1)
+        core_str = parts[0]
+        rmk = "RMK" + parts[1]
+    elif ' TEMPO' in core_str:
+        parts = core_str.split(' TEMPO', 1)
+        core_str = parts[0]
+        rmk = "TEMPO" + parts[1]
+    elif ' BECMG' in core_str:
+        parts = core_str.split(' BECMG', 1)
+        core_str = parts[0]
+        rmk = "BECMG" + parts[1]
+    elif ' NOSIG' in core_str:
+        parts = core_str.split(' NOSIG', 1)
+        core_str = parts[0]
+        rmk = "NOSIG"
+        
+    rmk = rmk.strip()
+    # ----------------------------------------------------------------------
+
     tokens = core_str.split()
     
-    header_title, loc, time_str, wind, vis, wx, cloud, t_dp, qnh, rmk = report_type, "NIL", "NIL", "NIL", "NIL", "NIL", "NIL", "NIL", "NIL", "NOSIG"
+    header_title, loc, time_str, wind, vis, wx, cloud, t_dp, qnh = report_type, "NIL", "NIL", "NIL", "NIL", "NIL", "NIL", "NIL", "NIL"
     
     is_cor = False
     cc_type = ""
@@ -82,7 +105,6 @@ def parse_metar_speci(sandi_str):
             if re.match(r'^\d{5}(G\d{2})?KT$', t) or re.match(r'^VRB\d{2}KT$', t) or t == '00000KT': wind = t
             elif re.match(r'^\d{2}/\d{2}$', t) or re.match(r'^M\d{2}/\d{2}$', t): t_dp = t.replace('/', ' / ')
             elif re.match(r'^Q\d{4}$', t): qnh = t
-            elif t in ['NOSIG', 'TEMPO', 'BECMG']: rmk = t
     else:
         cloud_list = []
         for t in remaining_tokens:
@@ -92,7 +114,6 @@ def parse_metar_speci(sandi_str):
             elif re.match(r'^(FEW|SCT|BKN|OVC)\d{3}(CB|TCU)?$', t) or t in ['NSC', 'SKC', 'CLR']: cloud_list.append(t)
             elif re.match(r'^\d{2}/\d{2}$', t) or re.match(r'^M\d{2}/\d{2}$', t): t_dp = t.replace('/', ' / ')
             elif re.match(r'^Q\d{4}$', t): qnh = t
-            elif t in ['NOSIG', 'TEMPO', 'BECMG']: rmk = t
         if cloud_list:
             cloud = " ".join(cloud_list)
             
