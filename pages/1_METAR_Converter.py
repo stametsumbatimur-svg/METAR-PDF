@@ -50,20 +50,21 @@ def parse_metar_speci(sandi_str):
     start_idx = sandi_str.find(report_type)
     core_str = sandi_str[start_idx:].replace('=', '').strip()
     
-    # --- LOGIKA BARU: EKSTRAKSI RMK & TREND FORECAST SEBELUM TOKENISASI ---
+    # --- LOGIKA BARU: EKSTRAKSI RMK TANPA KATA AWALAN 'RMK' ---
     rmk = "NOSIG"
     if ' RMK' in core_str:
         parts = core_str.split(' RMK', 1)
         core_str = parts[0]
-        rmk = "RMK" + parts[1]
+        # Hanya mengambil sisa teks tanpa menambahkan "RMK " lagi
+        rmk = parts[1].strip() 
     elif ' TEMPO' in core_str:
         parts = core_str.split(' TEMPO', 1)
         core_str = parts[0]
-        rmk = "TEMPO" + parts[1]
+        rmk = "TEMPO " + parts[1].strip()
     elif ' BECMG' in core_str:
         parts = core_str.split(' BECMG', 1)
         core_str = parts[0]
-        rmk = "BECMG" + parts[1]
+        rmk = "BECMG " + parts[1].strip()
     elif ' NOSIG' in core_str:
         parts = core_str.split(' NOSIG', 1)
         core_str = parts[0]
