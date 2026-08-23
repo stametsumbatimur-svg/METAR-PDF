@@ -162,7 +162,7 @@ def generate_excel_bytes_metar_speci_fallback(df_clean, report_type="METAR"):
 # =================================================================================================
 # ===== EXCEL TEMPLATE INSERTER (METAR: HARIAN 1 HALAMAN LENGKAP KOP) =============================
 # =================================================================================================
-def generate_excel_from_template_daily(df_clean, report_type="METAR", template_path="TEMPLATE METAR_3.xlsx", logo_path="logo_bmkg.png"):
+def generate_excel_from_template_daily(df_clean, report_type="METAR", template_path="TEMPLATE METAR.xlsx", logo_path="logo_bmkg.png"):
     if not os.path.exists(template_path):
         for alt in ["TEMPLATE METAR.xlsx", "TEMPLATE METAR_2.xlsx", "TEMPLATE METAR_3.xlsx"]:
             if os.path.exists(alt):
@@ -246,7 +246,7 @@ def generate_excel_from_template_daily(df_clean, report_type="METAR", template_p
             if os.path.exists(logo_path):
                 try:
                     img = OpenpyxlImage(logo_path)
-                    img.width = 45; img.height = 45
+                    img.width = 80; img.height = 80
                     ws.add_image(img, f'A{start_row}')
                 except:
                     pass
@@ -386,7 +386,7 @@ def generate_excel_from_template_speci(df_clean, report_type="SPECI", template_p
         if os.path.exists(logo_path):
             try:
                 img = OpenpyxlImage(logo_path)
-                img.width = 45; img.height = 45
+                img.width = 80; img.height = 80
                 ws.add_image(img, 'A1')
             except:
                 pass
@@ -1256,7 +1256,7 @@ if menu == "METAR Converter":
         st.markdown("""
         **Syarat File CSV:**
         - File hasil extract dari "https://bmkgsatu.bmkg.go.id/extractgts" data METAR dengan status SENT.
-        - Jika file `TEMPLATE METAR_3.xlsx` tersedia di direktori yang sama, program akan menggunakan format KOP Surat terstandar.
+        - Jika file `TEMPLATE METAR.xlsx` tersedia di direktori yang sama, program akan menggunakan format KOP Surat terstandar.
         """)
     uploaded_file = st.file_uploader("Upload file CSV METAR", type=["csv"])
     if uploaded_file is not None:
@@ -1292,8 +1292,8 @@ if menu == "METAR Converter":
                         else:
                             st.success(f"Berhasil memproses data METAR!")
                             
-                            DEFAULT_TEMPLATE_METAR = "TEMPLATE METAR_3.xlsx"
-                            if os.path.exists(DEFAULT_TEMPLATE_METAR) or os.path.exists("TEMPLATE METAR_2.xlsx") or os.path.exists("TEMPLATE METAR.xlsx"):
+                            DEFAULT_TEMPLATE_METAR = "TEMPLATE METAR.xlsx"
+                            if os.path.exists(DEFAULT_TEMPLATE_METAR) or os.path.exists("TEMPLATE METAR_2.xlsx") or os.path.exists("TEMPLATE METAR_3.xlsx"):
                                 excel_data = generate_excel_from_template_daily(df_clean, report_type="METAR", template_path=DEFAULT_TEMPLATE_METAR, logo_path=LOGO_FILE)
                             else:
                                 st.warning(f"⚠️ File '{DEFAULT_TEMPLATE_METAR}' tidak ditemukan. Menggunakan format Excel standar.")
@@ -1348,7 +1348,7 @@ elif menu == "SPECI Converter":
                         
                         DEFAULT_TEMPLATE_METAR = "TEMPLATE METAR_3.xlsx"
                         if os.path.exists(DEFAULT_TEMPLATE_METAR) or os.path.exists("TEMPLATE METAR_2.xlsx") or os.path.exists("TEMPLATE METAR.xlsx"):
-                            excel_data = generate_excel_from_template_speci(df_clean, report_type="SPECI", template_path=DEFAULT_TEMPLATE_METAR, logo_path=LOGO_FILE)
+                            excel_data = generate_excel_from_template_speci(df_clean, report_type="SPECI", template_path=DEFAULT_TEMPLATE_METAR, _path=_FILE)
                         else:
                             st.warning(f"⚠️ File '{DEFAULT_TEMPLATE_METAR}' tidak ditemukan. Menggunakan format Excel standar.")
                             excel_data = generate_excel_bytes_metar_speci_fallback(df_clean, report_type="SPECI")
