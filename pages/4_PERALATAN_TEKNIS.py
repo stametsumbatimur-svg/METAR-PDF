@@ -39,7 +39,7 @@ class EnginePerapihData:
 
     @staticmethod
     def standardize_columns(df):
-        """Memetakan nama kolom mentah (AWOS/AWS/Runway manapun) ke nama universal."""
+        """Memetakan nama kolom mentah ke nama universal & menghapus duplikasi nama kolom."""
         rename_dict = {}
         for c in df.columns:
             str_c = str(c).strip()
@@ -63,7 +63,12 @@ class EnginePerapihData:
                 rename_dict[c] = 'Precip_1Hr'
             elif re.search(r'ground\s*temp|^\s*GNDT\s*$', str_c, re.I):
                 rename_dict[c] = 'Ground_Temp'
-        return df.rename(columns=rename_dict)
+                
+        df_renamed = df.rename(columns=rename_dict)
+        # Hapus duplikasi nama kolom jika ada lebih dari satu kolom terpetakan ke nama sama
+        if df_renamed.columns.duplicated().any():
+            df_renamed = df_renamed.loc[:, ~df_renamed.columns.duplicated(keep='first')]
+        return df_renamed
 
     @staticmethod
     def smart_parse_datetime(date_series, time_series):
@@ -143,10 +148,14 @@ class EnginePerapihData:
         df_clean['DateKey'] = df_clean['datetime_temp'].dt.strftime('%Y%m%d').astype('int64')
         df_clean['TimeKey'] = df_clean['datetime_temp'].dt.strftime('%H%M').astype('int64')
 
+        # Type Casting Numerik Aman dari Duplikasi Kolom
         cols_to_exclude = {'PK_Datetime', 'DateKey', 'TimeKey', 'Date', 'Time', 'datetime_temp', 'S'}
         target_cols = [c for c in df_clean.columns if c not in cols_to_exclude]
         for col in target_cols:
-            df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
+            s = df_clean[col]
+            if isinstance(s, pd.DataFrame):
+                s = s.iloc[:, 0]
+            df_clean[col] = pd.to_numeric(s, errors='coerce')
 
         # QC Limits Check Universal
         qc_limits = {
@@ -160,7 +169,10 @@ class EnginePerapihData:
         }
         for col, (vmin, vmax) in qc_limits.items():
             if col in df_clean.columns:
-                df_clean.loc[(df_clean[col] < vmin) | (df_clean[col] > vmax), col] = np.nan
+                val = df_clean[col]
+                if isinstance(val, pd.DataFrame):
+                    val = val.iloc[:, 0]
+                df_clean.loc[(val < vmin) | (val > vmax), col] = np.nan
 
         # Dew Point Calculation
         if 'Air_Temp' in df_clean.columns and 'RH' in df_clean.columns:
@@ -319,7 +331,6 @@ class EnginePerapihData:
         dim_time = EnginePerapihData.generate_dim_time()
         dim_sensor = EnginePerapihData.generate_dim_sensor(sensor_labels)
 
-        # Drop kolom string Date/Time pada Fact Table untuk efisiensi VertiPaq Power BI
         fact_df = df_data.drop(columns=['Date', 'Time'], errors='ignore')
         key_cols = ['PK_Datetime', 'DateKey', 'TimeKey']
         other_cols = [c for c in fact_df.columns if c not in key_cols]
@@ -429,12 +440,12 @@ tab_awos, tab_fdb, tab_aws = st.tabs([
 
 # --- TAB 1: AWOS UNIVERSAL ---
 with tab_awos:
-    st.subheader("Pengolahan Data AWOS (.CSV / .XLSX)")
-    files_awos = st.file_uploader("Upload File Mentah AWOS", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True, key="awos_new")
+    st.subheader("Pengolahan Data AWOS Universal (.CSV / .XLSX)")
+    files_awos = st.file_uploader("Upload File AWOS", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True, key="awos_new")
     
     if st.button("Proses Data AWOS 🚀", key="btn_awos"):
         if not files_awos:
-            st.error("Silakan upload minimal satu file AWOS!")
+            st.error("Silakan upload file AWOS!")
         else:
             with st.spinner("Sedang diproses..."):
                 df_all = EnginePerapihData.load_files_to_dataframe(files_awos)
@@ -461,7 +472,7 @@ with tab_fdb:
         if not fdb_file:
             st.error("Upload file .FDB terlebih dahulu!")
         else:
-            with st.spinner("Mengekstrak tabel database FDB..."):
+            with st.spinner("Sedang diproses..."):
                 df_fdb = EnginePerapihData.baca_database_fdb(fdb_file.getbuffer(), EnginePerapihData.KOLOM_AWS_RESMI)
                 df_clean = EnginePerapihData.normalize_dataframe(df_fdb)
                 
@@ -476,12 +487,12 @@ with tab_fdb:
 
 # --- TAB 3: AWS MULTI-FORMAT ---
 with tab_aws:
-    st.subheader("Pengolahan Data AWS Multi-Format (.XLSX / .CSV / .TXT / .FDB)")
-    files_aws = st.file_uploader("Upload File Mentah AWS (Text/Excel/CSV/FDB)", type=['xlsx', 'xls', 'csv', 'txt', 'fdb'], accept_multiple_files=True, key="aws_new")
+    st.subheader("Pengolahan Data AWS (.XLSX / .CSV / .TXT / .FDB)")
+    files_aws = st.file_uploader("Upload File AWS (Text/Excel/CSV/FDB)", type=['xlsx', 'xls', 'csv', 'txt', 'fdb'], accept_multiple_files=True, key="aws_new")
     
     if st.button("Proses Data AWS 🚀", key="btn_aws"):
         if not files_aws:
-            st.error("Silakan upload minimal satu file AWS!")
+            st.error("Silakan upload file AWS!")
         else:
             with st.spinner("Sedang diproses..."):
                 df_all = EnginePerapihData.load_files_to_dataframe(files_aws)
