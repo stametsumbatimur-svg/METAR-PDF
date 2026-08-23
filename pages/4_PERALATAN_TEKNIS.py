@@ -17,12 +17,80 @@ st.set_page_config(
 # --- ENGINE OLAH DATA & HELPER ---
 class EnginePerapihData:
     
+    KOLOM_AWS_RESMI = [
+        'Date', 'Time', 'S', 'DD', 'FF', 'DM10', 'FM10', 'DD2', 'FF2', 
+        'DVN', 'DVX', 'FVN', 'FVX', 'RR', 'RH', 'TSV', 'DP', 'T', 
+        'GLOR', 'GLORP', 'INSD', 'STAP', 'MSLP', 'GNDT'
+    ]
+
+    AWOS_LABELS = {
+        'Air Tmp (C) 33': 'Suhu Udara', 'Dew Pt (C) 33': 'Titik Embun',
+        'RH (%) 33': 'Kelembaban', 'QFE (hPa) 33': 'Tekanan QFE',
+        'QNH (hPa) 33': 'Tekanan QNH', 'WS (kt) 33': 'Kecepatan Angin',
+        'Mag WD (deg) 33': 'Arah Angin', 'Solar Rad (W/m^2) 33': 'Radiasi Matahari',
+        'Precip 1Hr (mm) 33': 'Curah Hujan'
+    }
+
+    AWS_LABELS = {
+        'DD': 'Arah Angin', 'FF': 'Kecepatan Angin', 'RR': 'Curah Hujan',
+        'RH': 'Kelembaban', 'DP': 'Titik Embun', 'T': 'Suhu Udara',
+        'STAP': 'Tekanan Stasiun', 'GNDT': 'Suhu Tanah'
+    }
+
     @staticmethod
     def smart_parse_datetime(date_series, time_series):
         combined = date_series.astype(str).str.strip() + ' ' + time_series.astype(str).str.strip()
         dt_parsed = pd.to_datetime(combined, format='mixed', dayfirst=True, errors='coerce')
-        # Penetapan eksplisit Zona Waktu UTC
         return dt_parsed.dt.tz_localize('UTC', ambiguous='NaT', nonexistent='NaT')
+
+    @classmethod
+    def load_files_to_dataframe(cls, uploaded_files, is_awos=False):
+        list_df = []
+        awos_mapping = {
+            'Date and Time': 'Date_Time_Raw', 'airTemperatureValidated.RWYA': 'Air Tmp (C) 33',
+            'dewPointValidated.RWYA': 'Dew Pt (C) 33', 'relativeHumidityValidated.RWYA': 'RH (%) 33',
+            'QFE.RWYA': 'QFE (hPa) 33', 'QNH.RWYA': 'QNH (hPa) 33', 'windSpeedSelected.RWYA': 'WS (kt) 33',
+            'instant.windDirection.RWYA': 'Mag WD (deg) 33', 'solarRadiation.RWYA': 'Solar Rad (W/m^2) 33',
+            'oneHour.precipSelected.RWYA': 'Precip 1Hr (mm) 33'
+        }
+        
+        for fp in uploaded_files:
+            ext = fp.name.lower()
+            if ext.endswith('.fdb'):
+                df_fdb = cls.baca_database_fdb(fp.getbuffer(), cls.KOLOM_AWS_RESMI)
+                if not df_fdb.empty:
+                    list_df.append(df_fdb)
+            elif ext.endswith(('.xlsx', '.xls')):
+                df_ex = pd.read_excel(fp)
+                if is_awos:
+                    df_ex.rename(columns=awos_mapping, inplace=True)
+                
+                if len(df_ex.columns) == 1:
+                    lines = df_ex.iloc[:, 0].dropna().astype(str).tolist()
+                    rows = cls.parse_text_lines(lines, cls.KOLOM_AWS_RESMI)
+                    if rows: list_df.append(pd.DataFrame(rows, columns=cls.KOLOM_AWS_RESMI))
+                else:
+                    if 'Date_Time_Raw' in df_ex.columns:
+                        split_dt = df_ex['Date_Time_Raw'].astype(str).str.split(r'\s+', n=1, expand=True)
+                        df_ex.insert(0, 'Time', split_dt[1].fillna('00:00:00') if split_dt.shape[1] > 1 else '00:00:00')
+                        df_ex.insert(0, 'Date', split_dt[0])
+                        df_ex.drop(columns=['Date_Time_Raw'], inplace=True)
+                    list_df.append(df_ex)
+            elif ext.endswith('.csv'):
+                df_csv = pd.read_csv(fp)
+                if 'Date' not in df_csv.columns:
+                    orig_col = df_csv.columns[0]
+                    split_dt = df_csv[orig_col].astype(str).str.split(r'\s+', n=1, expand=True)
+                    df_csv.insert(0, 'Time', split_dt[1].fillna('00:00:00') if split_dt.shape[1] > 1 else '00:00:00')
+                    df_csv.insert(0, 'Date', split_dt[0])
+                    df_csv.drop(columns=[orig_col], inplace=True)
+                list_df.append(df_csv)
+            else:
+                lines = fp.getvalue().decode('utf-8', errors='ignore').splitlines()
+                rows = cls.parse_text_lines(lines, cls.KOLOM_AWS_RESMI)
+                if rows: list_df.append(pd.DataFrame(rows, columns=cls.KOLOM_AWS_RESMI))
+                
+        return pd.concat(list_df, ignore_index=True) if list_df else pd.DataFrame()
 
     @staticmethod
     @st.cache_data(show_spinner=False)
@@ -30,19 +98,17 @@ class EnginePerapihData:
         if df is None or df.empty or 'Date' not in df.columns or 'Time' not in df.columns:
             return df
 
-        # Filter tanggal valid
         date_str = df['Date'].astype(str).str.strip()
         valid_mask = df['Date'].notna() & date_str.ne('') & date_str.str.lower().ne('nan')
         df_clean = df[valid_mask].copy()
 
-        # Parse & urutkan Waktu (UTC)
+        # UTC Datetime Processing
         df_clean['datetime_temp'] = EnginePerapihData.smart_parse_datetime(df_clean['Date'], df_clean['Time'])
         df_clean.dropna(subset=['datetime_temp'], inplace=True)
         df_clean.drop_duplicates(subset=['datetime_temp'], inplace=True)
         df_clean.set_index('datetime_temp', inplace=True)
         df_clean.sort_index(inplace=True)
 
-        # Resample Kontinu 1-Menit
         if not df_clean.empty:
             df_clean = df_clean.resample('1min').asfreq()
         
@@ -50,32 +116,31 @@ class EnginePerapihData:
         df_clean['Date'] = df_clean['datetime_temp'].dt.strftime('%Y-%m-%d')
         df_clean['Time'] = df_clean['datetime_temp'].dt.strftime('%H:%M:00')
 
-        # Generate Primary & Foreign Keys untuk Power BI Modeling (UTC Basis)
+        # Power BI Foreign Keys (UTC Basis)
         df_clean['PK_Datetime'] = df_clean['datetime_temp'].dt.strftime('%Y%m%d%H%M').astype('int64')
         df_clean['DateKey'] = df_clean['datetime_temp'].dt.strftime('%Y%m%d').astype('int64')
         df_clean['TimeKey'] = df_clean['datetime_temp'].dt.strftime('%H%M').astype('int64')
 
-        # Type Casting Numerik Tervektorisasi
-        cols_to_exclude = {'PK_Datetime', 'DateKey', 'TimeKey', 'Date', 'Time', 'datetime_temp', 'Date_Time_Raw', 'S'}
+        cols_to_exclude = {'PK_Datetime', 'DateKey', 'TimeKey', 'Date', 'Time', 'datetime_temp', 'S'}
         target_cols = [c for c in df_clean.columns if c not in cols_to_exclude]
         for col in target_cols:
             df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
 
-        # Quality Control (QC) Range Check Fisik Tervektorisasi
+        # QC Physical Limits Check (Termasuk Suhu Tanah / GNDT)
         qc_limits = {
             ('T', 'Air Tmp (C) 33'): (-50, 60),
             ('RH', 'RH (%) 33'): (0, 100),
             ('DD', 'Mag WD (deg) 33'): (0, 360),
             ('FF', 'WS (kt) 33'): (0, 150),
             ('STAP', 'MSLP', 'QFE (hPa) 33', 'QNH (hPa) 33'): (600, 1150),
-            ('GNDT',): (-10, 70)  # QC Suhu Tanah (Ground Temp °C)
+            ('GNDT',): (-10, 70)
         }
         for cols, (vmin, vmax) in qc_limits.items():
             for col in cols:
                 if col in df_clean.columns:
                     df_clean.loc[(df_clean[col] < vmin) | (df_clean[col] > vmax), col] = np.nan
 
-        # Kalkulasi Titik Embun (Dew Point / DP)
+        # Dew Point Calculation
         t_col = 'T' if 'T' in df_clean.columns else ('Air Tmp (C) 33' if 'Air Tmp (C) 33' in df_clean.columns else None)
         rh_col = 'RH' if 'RH' in df_clean.columns else ('RH (%) 33' if 'RH (%) 33' in df_clean.columns else None)
         dp_col = 'DP' if 'DP' in df_clean.columns else ('Dew Pt (C) 33' if 'Dew Pt (C) 33' in df_clean.columns else 'DP')
@@ -92,12 +157,9 @@ class EnginePerapihData:
             missing_dp = df_clean[dp_col].isna()
             df_clean.loc[missing_dp & valid_trh, dp_col] = dp_calc[missing_dp & valid_trh]
 
-        # Reorder Kolom Fact Table: Pindahkan Keys ke paling depan
-        keys = ['PK_Datetime', 'DateKey', 'TimeKey']
-        other_cols = [c for c in df_clean.columns if c not in keys and c != 'datetime_temp']
-        return df_clean[keys + other_cols]
+        df_clean.drop(columns=['datetime_temp'], inplace=True, errors='ignore')
+        return df_clean
 
-    # --- GENERATOR TABEL DIMENSI POWER BI ---
     @staticmethod
     def generate_dim_date(df_clean):
         if df_clean.empty or 'DateKey' not in df_clean.columns:
@@ -120,19 +182,23 @@ class EnginePerapihData:
 
     @staticmethod
     def generate_dim_time():
-        time_range = pd.date_range('00:00', '23:59', freq='1min')
-        dim_time = pd.DataFrame({'Time_Obj': time_range})
-        dim_time['TimeKey'] = dim_time['Time_Obj'].dt.strftime('%H%M').astype('int64')
-        dim_time['Time'] = dim_time['Time_Obj'].dt.strftime('%H:%M:00')
-        dim_time['Hour'] = dim_time['Time_Obj'].dt.hour
-        dim_time['Minute'] = dim_time['Time_Obj'].dt.minute
-        dim_time['PeriodOfDay'] = pd.cut(
-            dim_time['Hour'], 
-            bins=[-1, 5, 11, 17, 23], 
+        # UTC + WITA (UTC+8) Dual Timezone Matrix
+        utc_range = pd.date_range('2000-01-01 00:00', '2000-01-01 23:59', freq='1min')
+        wita_range = utc_range + pd.Timedelta(hours=8)
+        
+        dim_time = pd.DataFrame({
+            'TimeKey': utc_range.strftime('%H%M').astype('int64'),
+            'Time_UTC': utc_range.strftime('%H:%M:00'),
+            'Time_WITA': wita_range.strftime('%H:%M:00'),
+            'Hour_WITA': wita_range.hour,
+        })
+        
+        dim_time['PeriodOfDay_WITA'] = pd.cut(
+            dim_time['Hour_WITA'],
+            bins=[-1, 5, 11, 17, 23],
             labels=['Dini Hari', 'Pagi', 'Siang/Sore', 'Malam']
         )
-        cols = ['TimeKey', 'Time', 'Hour', 'Minute', 'PeriodOfDay']
-        return dim_time[cols]
+        return dim_time[['TimeKey', 'Time_UTC', 'Time_WITA', 'Hour_WITA', 'PeriodOfDay_WITA']]
 
     @staticmethod
     def generate_dim_sensor(sensor_labels):
@@ -144,15 +210,15 @@ class EnginePerapihData:
             'STAP': (600, 1150), 'MSLP': (600, 1150), 'QFE (hPa) 33': (600, 1150), 'QNH (hPa) 33': (600, 1150),
             'GNDT': (-10, 70)
         }
-        rows = []
-        for code, name in sensor_labels.items():
-            vmin, vmax = qc_limits.get(code, (None, None))
-            rows.append({
+        rows = [
+            {
                 'SensorCode': code,
                 'SensorName': name,
-                'QC_Min_Limit': vmin,
-                'QC_Max_Limit': vmax
-            })
+                'QC_Min_Limit': qc_limits.get(code, (None, None))[0],
+                'QC_Max_Limit': qc_limits.get(code, (None, None))[1]
+            }
+            for code, name in sensor_labels.items()
+        ]
         return pd.DataFrame(rows)
 
     @staticmethod
@@ -167,7 +233,7 @@ class EnginePerapihData:
         
         if tokens_first:
             t0 = tokens_first[0].lower()
-            if 'date' in t0 or 'tgl' in t0 or 'tanggal' in t0 or 'waktu' in t0 or not any(c.isdigit() for c in t0):
+            if any(k in t0 for k in ['date', 'tgl', 'tanggal', 'waktu']) or not any(c.isdigit() for c in t0):
                 start_idx = 1
 
         needed_payload_len = len(kolom_aws_resmi) - 2
@@ -235,19 +301,25 @@ class EnginePerapihData:
     def simpan_ke_excel_bytes(df_data, df_summary, data_sheet_name, sensor_labels):
         output = io.BytesIO()
         
-        # Inisialisasi Dimensi Tabel Power BI
+        # Power BI Dim Table Generators
         dim_date = EnginePerapihData.generate_dim_date(df_data)
         dim_time = EnginePerapihData.generate_dim_time()
         dim_sensor = EnginePerapihData.generate_dim_sensor(sensor_labels)
 
+        # Hapus kolom string Date/Time pada Fact Table untuk efisiensi VertiPaq Engine
+        fact_df = df_data.drop(columns=['Date', 'Time'], errors='ignore')
+        key_cols = ['PK_Datetime', 'DateKey', 'TimeKey']
+        other_cols = [c for c in fact_df.columns if c not in key_cols]
+        fact_df = fact_df[key_cols + other_cols]
+
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df_data.to_excel(writer, index=False, sheet_name=data_sheet_name)
+            fact_df.to_excel(writer, index=False, sheet_name=data_sheet_name)
             df_summary.to_excel(writer, index=False, sheet_name="Rangkuman_Ketersediaan")
             dim_date.to_excel(writer, index=False, sheet_name="Dim_Date")
             dim_time.to_excel(writer, index=False, sheet_name="Dim_Time")
             dim_sensor.to_excel(writer, index=False, sheet_name="Dim_Sensor")
             
-            # Formatting Styling
+            # Excel Formatting Styles
             font_header = Font(name='Arial', size=11, bold=True, color='FFFFFF')
             fill_header = PatternFill(start_color='1F4E78', end_color='1F4E78', fill_type='solid')
             align_header = Alignment(horizontal='center', vertical='center', wrap_text=True)
@@ -257,7 +329,6 @@ class EnginePerapihData:
             side_thin = Side(style='thin', color='D9D9D9')
             border_thin = Border(left=side_thin, right=side_thin, top=side_thin, bottom=side_thin)
 
-            # Styling untuk semua sheet
             for sheetname in [data_sheet_name, "Rangkuman_Ketersediaan", "Dim_Date", "Dim_Time", "Dim_Sensor"]:
                 ws = writer.sheets[sheetname]
                 ws.freeze_panes = 'A2'
@@ -335,7 +406,7 @@ class EnginePerapihData:
 
 
 # --- INTERFASE PENGGUNA (STREAMLIT UI) ---
-st.title("🌤️ Pengolah Data ALOPTAMA (UTC Basis)")
+st.title("🌤️ Pengolah Data ALOPTAMA")
 st.caption("Aplikasi Rekapitulasikan Data AWOS & AWS Strengthening - By Luqmanul Hakim, S.Tr")
 
 tab_awos, tab_fdb, tab_aws = st.tabs([
@@ -347,58 +418,25 @@ tab_awos, tab_fdb, tab_aws = st.tabs([
 # --- TAB 1: AWOS ---
 with tab_awos:
     st.subheader("Pengolahan Data AWOS (.CSV / .XLSX)")
-    awos_labels = {
-        'Air Tmp (C) 33': 'Suhu Udara', 'Dew Pt (C) 33': 'Titik Embun',
-        'RH (%) 33': 'Kelembaban', 'QFE (hPa) 33': 'Tekanan QFE',
-        'QNH (hPa) 33': 'Tekanan QNH', 'WS (kt) 33': 'Kecepatan Angin',
-        'Mag WD (deg) 33': 'Arah Angin', 'Solar Rad (W/m^2) 33': 'Radiasi Matahari',
-        'Precip 1Hr (mm) 33': 'Curah Hujan'
-    }
-    
     files_awos = st.file_uploader("Upload File Mentah AWOS", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True, key="awos_new")
     
     if st.button("Proses Data AWOS 🚀", key="btn_awos"):
         if not files_awos:
             st.error("Silakan upload minimal satu file AWOS!")
         else:
-            with st.spinner("Memproses, Menyelaraskan Waktu UTC, & QC AWOS..."):
-                list_df = []
-                for fp in files_awos:
-                    if fp.name.endswith(('.xlsx', '.xls')):
-                        df = pd.read_excel(fp)
-                        mapping_eg = {
-                            'Date and Time': 'Date_Time_Raw', 'airTemperatureValidated.RWYA': 'Air Tmp (C) 33',
-                            'dewPointValidated.RWYA': 'Dew Pt (C) 33', 'relativeHumidityValidated.RWYA': 'RH (%) 33',
-                            'QFE.RWYA': 'QFE (hPa) 33', 'QNH.RWYA': 'QNH (hPa) 33', 'windSpeedSelected.RWYA': 'WS (kt) 33',
-                            'instant.windDirection.RWYA': 'Mag WD (deg) 33', 'solarRadiation.RWYA': 'Solar Rad (W/m^2) 33',
-                            'oneHour.precipSelected.RWYA': 'Precip 1Hr (mm) 33'
-                        }
-                        df.rename(columns=mapping_eg, inplace=True)
-                        if 'Date_Time_Raw' in df.columns:
-                            split_dt = df['Date_Time_Raw'].astype(str).str.split(r'\s+', n=1, expand=True)
-                            df.insert(0, 'Time', split_dt[1].fillna('00:00:00') if split_dt.shape[1] > 1 else '00:00:00')
-                            df.insert(0, 'Date', split_dt[0])
-                            df.drop(columns=['Date_Time_Raw'], inplace=True)
-                        list_df.append(df)
-                    elif fp.name.endswith('.csv'):
-                        df = pd.read_csv(fp)
-                        orig_col = df.columns[0]
-                        split_dt = df[orig_col].astype(str).str.split(r'\s+', n=1, expand=True)
-                        df.insert(0, 'Time', split_dt[1].fillna('00:00:00') if split_dt.shape[1] > 1 else '00:00:00')
-                        df.insert(0, 'Date', split_dt[0])
-                        df.drop(columns=[orig_col], inplace=True)
-                        list_df.append(df)
-                
-                df_all = pd.concat(list_df, ignore_index=True)
+            with st.spinner("Memproses, Menyelaraskan UTC, & QC AWOS..."):
+                df_all = EnginePerapihData.load_files_to_dataframe(files_awos, is_awos=True)
                 df_clean = EnginePerapihData.normalize_dataframe(df_all)
-                df_summary = EnginePerapihData.buat_rangkuman_per_sensor(df_clean, awos_labels)
-                excel_bytes = EnginePerapihData.simpan_ke_excel_bytes(df_clean, df_summary, "Fact_AWOS_Data", awos_labels)
+                df_summary = EnginePerapihData.buat_rangkuman_per_sensor(df_clean, EnginePerapihData.AWOS_LABELS)
+                excel_bytes = EnginePerapihData.simpan_ke_excel_bytes(
+                    df_clean, df_summary, "Fact_AWOS_Data", EnginePerapihData.AWOS_LABELS
+                )
                 
-                st.success("✅ Data AWOS Berhasil Diproses dengan Dimensi Power BI!")
+                st.success("✅ Data AWOS Berhasil Diproses dengan Model Power BI!")
                 st.download_button(
-                    label="⬇️ Download Excel AWOS Clean + Power BI DIMs",
+                    label="⬇️ Download Excel AWOS",
                     data=excel_bytes,
-                    file_name="AWOS_PowerBI_Ready.xlsx",
+                    file_name="AWOS_Clean.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
 
@@ -412,8 +450,7 @@ with tab_fdb:
             st.error("Upload file .FDB terlebih dahulu!")
         else:
             with st.spinner("Mengekstrak tabel database FDB..."):
-                kolom_aws = ['Date', 'Time', 'S', 'DD', 'FF', 'DM10', 'FM10', 'DD2', 'FF2', 'DVN', 'DVX', 'FVN', 'FVX', 'RR', 'RH', 'TSV', 'DP', 'T', 'GLOR', 'GLORP', 'INSD', 'STAP', 'MSLP', 'GNDT']
-                df_fdb = EnginePerapihData.baca_database_fdb(fdb_file.getbuffer(), kolom_aws)
+                df_fdb = EnginePerapihData.baca_database_fdb(fdb_file.getbuffer(), EnginePerapihData.KOLOM_AWS_RESMI)
                 df_clean = EnginePerapihData.normalize_dataframe(df_fdb)
                 
                 csv_bytes = df_clean.to_csv(index=False).encode('utf-8')
@@ -427,50 +464,25 @@ with tab_fdb:
 
 # --- TAB 3: AWS MULTI-FORMAT ---
 with tab_aws:
-    st.subheader("Pengolahan Data AWS Multi-Format (.XLSX / .CSV / .TXT / .FDB)")
-    aws_labels = {
-        'DD': 'Arah Angin', 'FF': 'Kecepatan Angin', 'RR': 'Curah Hujan',
-        'RH': 'Kelembaban', 'DP': 'Titik Embun', 'T': 'Suhu Udara',
-        'STAP': 'Tekanan Stasiun', 'GNDT': 'Suhu Tanah'
-    }
-    kolom_aws_resmi = ['Date', 'Time', 'S', 'DD', 'FF', 'DM10', 'FM10', 'DD2', 'FF2', 'DVN', 'DVX', 'FVN', 'FVX', 'RR', 'RH', 'TSV', 'DP', 'T', 'GLOR', 'GLORP', 'INSD', 'STAP', 'MSLP', 'GNDT']
-    
-    files_aws = st.file_uploader("Upload File Mentah AWS (Format Text/Excel/CSV/FDB)", type=['xlsx', 'xls', 'csv', 'txt', 'fdb'], accept_multiple_files=True, key="aws_new")
+    st.subheader("Pengolahan Data AWS (.XLSX / .CSV / .TXT / .FDB)")
+    files_aws = st.file_uploader("Upload File Mentah AWS", type=['xlsx', 'xls', 'csv', 'txt', 'fdb'], accept_multiple_files=True, key="aws_new")
     
     if st.button("Proses Data AWS 🚀", key="btn_aws"):
         if not files_aws:
             st.error("Silakan upload minimal satu file AWS!")
         else:
-            with st.spinner("Memproses & Merekonstruksi Data AWS (UTC Basis)..."):
-                list_df = []
-                for fp in files_aws:
-                    ext = fp.name.lower()
-                    if ext.endswith('.fdb'):
-                        df_fdb = EnginePerapihData.baca_database_fdb(fp.getbuffer(), kolom_aws_resmi)
-                        if not df_fdb.empty: list_df.append(df_fdb)
-                    elif ext.endswith('.csv'):
-                        list_df.append(pd.read_csv(fp))
-                    elif ext.endswith(('.xlsx', '.xls')):
-                        df_ex = pd.read_excel(fp)
-                        if len(df_ex.columns) == 1:
-                            lines = df_ex.iloc[:, 0].dropna().astype(str).tolist()
-                            data_rows = EnginePerapihData.parse_text_lines(lines, kolom_aws_resmi)
-                            if data_rows: list_df.append(pd.DataFrame(data_rows, columns=kolom_aws_resmi))
-                        else: list_df.append(df_ex)
-                    else:
-                        lines = fp.getvalue().decode('utf-8', errors='ignore').splitlines()
-                        data_rows = EnginePerapihData.parse_text_lines(lines, kolom_aws_resmi)
-                        if data_rows: list_df.append(pd.DataFrame(data_rows, columns=kolom_aws_resmi))
-                
-                df_all = pd.concat(list_df, ignore_index=True)
+            with st.spinner("Memproses & Merekonstruksi Data AWS (UTC)..."):
+                df_all = EnginePerapihData.load_files_to_dataframe(files_aws, is_awos=False)
                 df_clean = EnginePerapihData.normalize_dataframe(df_all)
-                df_summary = EnginePerapihData.buat_rangkuman_per_sensor(df_clean, aws_labels)
-                excel_bytes = EnginePerapihData.simpan_ke_excel_bytes(df_clean, df_summary, "Fact_AWS_Data", aws_labels)
+                df_summary = EnginePerapihData.buat_rangkuman_per_sensor(df_clean, EnginePerapihData.AWS_LABELS)
+                excel_bytes = EnginePerapihData.simpan_ke_excel_bytes(
+                    df_clean, df_summary, "Fact_AWS_Data", EnginePerapihData.AWS_LABELS
+                )
                 
-                st.success("✅ Data AWS Berhasil Diproses dengan Dimensi Power BI!")
+                st.success("✅ Data AWS Berhasil Diproses dengan Model Power BI!")
                 st.download_button(
-                    label="⬇️ Download Excel AWS Clean + Power BI DIMs",
+                    label="⬇️ Download Excel AWS",
                     data=excel_bytes,
-                    file_name="AWS_PowerBI_Ready.xlsx",
+                    file_name="AWS_Clean.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
