@@ -39,35 +39,56 @@ class EnginePerapihData:
 
     @staticmethod
     def standardize_columns(df):
-        """Memetakan nama kolom mentah ke nama universal & menghapus duplikasi nama kolom."""
+        """Memetakan sensor utama ke nama universal & membersihkan suffix runway (33, 07, .RWYA) dari semua kolom."""
         rename_dict = {}
+        
         for c in df.columns:
             str_c = str(c).strip()
-            if re.search(r'air\s*temp|airtemperaturevalidated|^\s*T\s*$', str_c, re.I):
+            
+            # Abaikan penamaan ulang universal jika kolom merupakan sub-metric agregasi (10 Min, 2 Min, MAX, MIN, 24 Hr)
+            is_submetric = re.search(r'10\s*min|2\s*min|60\s*min|1\s*min|24\s*hr|max|min|avg|gust', str_c, re.I)
+            
+            if not is_submetric and re.search(r'^(air\s*tm?p|airtemperaturevalidated|T)(\s*\(.*\))?(\s*\d{1,2}|\.RWY[A-Z0-9]+)?$', str_c, re.I):
                 rename_dict[c] = 'Air_Temp'
-            elif re.search(r'dew\s*pt|dewpointvalidated|^\s*DP\s*$', str_c, re.I):
+            elif not is_submetric and re.search(r'^(dew\s*pt|dewpointvalidated|DP)(\s*\(.*\))?(\s*\d{1,2}|\.RWY[A-Z0-9]+)?$', str_c, re.I):
                 rename_dict[c] = 'Dew_Point'
-            elif re.search(r'relativehumidity|^\s*RH\s*(\(%\))?', str_c, re.I):
+            elif not is_submetric and re.search(r'^(relativehumidityvalidated|relative\s*humidity|RH)(\s*\(.*\))?(\s*\d{1,2}|\.RWY[A-Z0-9]+)?$', str_c, re.I):
                 rename_dict[c] = 'RH'
-            elif re.search(r'windspeedselected|^\s*WS\s*(\(kt\))?(\s*\d+)?$|^\s*FF\s*$', str_c, re.I):
+            elif not is_submetric and re.search(r'^(windspeedselected|wind\s*speed|WS|FF)(\s*\(.*\))?(\s*\d{1,2}|\.RWY[A-Z0-9]+)?$', str_c, re.I):
                 rename_dict[c] = 'Wind_Speed'
-            elif re.search(r'winddirection|^\s*mag\s*wd|^\s*wd|^\s*DD\s*$', str_c, re.I):
+            elif not is_submetric and re.search(r'^(instant\.winddirection|wind\s*direction|mag\s*wd|WD|DD)(\s*\(.*\))?(\s*\d{1,2}|\.RWY[A-Z0-9]+)?$', str_c, re.I):
                 rename_dict[c] = 'Wind_Dir'
-            elif re.search(r'qfe|^\s*STAP\s*$', str_c, re.I):
+            elif not is_submetric and re.search(r'^(QFE|STAP)(\s*\(.*\))?(\s*\d{1,2}|\.RWY[A-Z0-9]+)?$', str_c, re.I):
                 rename_dict[c] = 'QFE'
-            elif re.search(r'qnh', str_c, re.I):
+            elif not is_submetric and re.search(r'^(QNH)(\s*\(.*\))?(\s*\d{1,2}|\.RWY[A-Z0-9]+)?$', str_c, re.I):
                 rename_dict[c] = 'QNH'
-            elif re.search(r'solarradiation|solar\s*rad|GLOR', str_c, re.I):
+            elif not is_submetric and re.search(r'^(solarradiation|solar\s*rad|GLOR)(\s*\(.*\))?(\s*\d{1,2}|\.RWY[A-Z0-9]+)?$', str_c, re.I):
                 rename_dict[c] = 'Solar_Rad'
-            elif re.search(r'precip|^\s*RR\s*$', str_c, re.I):
+            elif not is_submetric and re.search(r'^(onehour\.precipselected|precip\s*1hr|RR)(\s*\(.*\))?(\s*\d{1,2}|\.RWY[A-Z0-9]+)?$', str_c, re.I):
                 rename_dict[c] = 'Precip_1Hr'
-            elif re.search(r'ground\s*temp|^\s*GNDT\s*$', str_c, re.I):
+            elif not is_submetric and re.search(r'^(ground\s*temp|GNDT)(\s*\(.*\))?(\s*\d{1,2}|\.RWY[A-Z0-9]+)?$', str_c, re.I):
                 rename_dict[c] = 'Ground_Temp'
-                
+            else:
+                # Membersihkan suffix runway (seperti " 33", ".RWYA", " RWYA") dari seluruh kolom pendukung
+                s = re.sub(r'(\.|\s+)RWY[A-Z0-9]*', '', str_c, flags=re.I)
+                s = re.sub(r'(\)\s*)\d{1,2}\b', r'\1', s)
+                s = re.sub(r'\s+\d{1,2}$', '', s)
+                s = re.sub(r'\s+', ' ', s).strip()
+                rename_dict[c] = s
+
         df_renamed = df.rename(columns=rename_dict)
-        # Hapus duplikasi nama kolom jika ada lebih dari satu kolom terpetakan ke nama sama
-        if df_renamed.columns.duplicated().any():
-            df_renamed = df_renamed.loc[:, ~df_renamed.columns.duplicated(keep='first')]
+        
+        # Mencegah duplikasi nama kolom jika ada lebih dari satu sensor sejenis
+        cols = []
+        counts = {}
+        for col in df_renamed.columns:
+            if col in counts:
+                counts[col] += 1
+                cols.append(f"{col}_{counts[col]}")
+            else:
+                counts[col] = 0
+                cols.append(col)
+        df_renamed.columns = cols
         return df_renamed
 
     @staticmethod
@@ -126,7 +147,7 @@ class EnginePerapihData:
         valid_mask = df['Date'].notna() & date_str.ne('') & date_str.str.lower().ne('nan')
         df_clean = df[valid_mask].copy()
 
-        # Normalisasi Nama Kolom Universal
+        # Normalisasi Nama Kolom Universal & Pembersihan Suffix Runway
         df_clean = EnginePerapihData.standardize_columns(df_clean)
 
         # UTC Datetime Processing
@@ -148,7 +169,7 @@ class EnginePerapihData:
         df_clean['DateKey'] = df_clean['datetime_temp'].dt.strftime('%Y%m%d').astype('int64')
         df_clean['TimeKey'] = df_clean['datetime_temp'].dt.strftime('%H%M').astype('int64')
 
-        # Type Casting Numerik Aman dari Duplikasi Kolom
+        # Type Casting Numerik
         cols_to_exclude = {'PK_Datetime', 'DateKey', 'TimeKey', 'Date', 'Time', 'datetime_temp', 'S'}
         target_cols = [c for c in df_clean.columns if c not in cols_to_exclude]
         for col in target_cols:
@@ -430,7 +451,7 @@ class EnginePerapihData:
 
 # --- INTERFASE PENGGUNA (STREAMLIT UI) ---
 st.title("🌤️ Pengolah Data ALOPTAMA")
-st.caption("Aplikasi Rekapitulasikan Data AWOS & AWS Strengthening - By Luqmanul Hakim, S.Tr")
+st.caption("Aplikasi Perapih Data AWOS & AWS Strengthening - By Luqmanul Hakim, S.Tr")
 
 tab_awos, tab_fdb, tab_aws = st.tabs([
     "1. 📊 Panel AWOS Universal", 
@@ -440,12 +461,12 @@ tab_awos, tab_fdb, tab_aws = st.tabs([
 
 # --- TAB 1: AWOS UNIVERSAL ---
 with tab_awos:
-    st.subheader("Pengolahan Data AWOS Universal (.CSV / .XLSX)")
-    files_awos = st.file_uploader("Upload File AWOS", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True, key="awos_new")
+    st.subheader("Pengolahan Data AWOS (.CSV / .XLSX)")
+    files_awos = st.file_uploader("Upload File Mentah AWOS", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True, key="awos_new")
     
     if st.button("Proses Data AWOS 🚀", key="btn_awos"):
         if not files_awos:
-            st.error("Silakan upload file AWOS!")
+            st.error("Silakan upload AWOS!")
         else:
             with st.spinner("Sedang diproses..."):
                 df_all = EnginePerapihData.load_files_to_dataframe(files_awos)
@@ -472,7 +493,7 @@ with tab_fdb:
         if not fdb_file:
             st.error("Upload file .FDB terlebih dahulu!")
         else:
-            with st.spinner("Sedang diproses..."):
+            with st.spinner("Mengekstrak tabel database FDB..."):
                 df_fdb = EnginePerapihData.baca_database_fdb(fdb_file.getbuffer(), EnginePerapihData.KOLOM_AWS_RESMI)
                 df_clean = EnginePerapihData.normalize_dataframe(df_fdb)
                 
@@ -485,7 +506,7 @@ with tab_fdb:
                     mime="text/csv"
                 )
 
-# --- TAB 3: AWS MULTI-FORMAT ---
+# --- TAB 3: AWS ---
 with tab_aws:
     st.subheader("Pengolahan Data AWS (.XLSX / .CSV / .TXT / .FDB)")
     files_aws = st.file_uploader("Upload File AWS (Text/Excel/CSV/FDB)", type=['xlsx', 'xls', 'csv', 'txt', 'fdb'], accept_multiple_files=True, key="aws_new")
