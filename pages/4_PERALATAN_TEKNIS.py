@@ -20,7 +20,9 @@ class EnginePerapihData:
     @staticmethod
     def smart_parse_datetime(date_series, time_series):
         combined = date_series.astype(str).str.strip() + ' ' + time_series.astype(str).str.strip()
-        return pd.to_datetime(combined, format='mixed', dayfirst=True, errors='coerce')
+        dt_parsed = pd.to_datetime(combined, format='mixed', dayfirst=True, errors='coerce')
+        # Penetapan eksplisit Zona Waktu UTC
+        return dt_parsed.dt.tz_localize('UTC', ambiguous='NaT', nonexistent='NaT')
 
     @staticmethod
     @st.cache_data(show_spinner=False)
@@ -33,7 +35,7 @@ class EnginePerapihData:
         valid_mask = df['Date'].notna() & date_str.ne('') & date_str.str.lower().ne('nan')
         df_clean = df[valid_mask].copy()
 
-        # Parse & urutkan Waktu
+        # Parse & urutkan Waktu (UTC)
         df_clean['datetime_temp'] = EnginePerapihData.smart_parse_datetime(df_clean['Date'], df_clean['Time'])
         df_clean.dropna(subset=['datetime_temp'], inplace=True)
         df_clean.drop_duplicates(subset=['datetime_temp'], inplace=True)
@@ -48,11 +50,13 @@ class EnginePerapihData:
         df_clean['Date'] = df_clean['datetime_temp'].dt.strftime('%Y-%m-%d')
         df_clean['Time'] = df_clean['datetime_temp'].dt.strftime('%H:%M:00')
 
-        # Generate Primary Key untuk Power BI (Format YYYYMMDDHHMM)
+        # Generate Primary & Foreign Keys untuk Power BI Modeling (UTC Basis)
         df_clean['PK_Datetime'] = df_clean['datetime_temp'].dt.strftime('%Y%m%d%H%M').astype('int64')
+        df_clean['DateKey'] = df_clean['datetime_temp'].dt.strftime('%Y%m%d').astype('int64')
+        df_clean['TimeKey'] = df_clean['datetime_temp'].dt.strftime('%H%M').astype('int64')
 
         # Type Casting Numerik Tervektorisasi
-        cols_to_exclude = {'PK_Datetime', 'Date', 'Time', 'datetime_temp', 'Date_Time_Raw', 'S'}
+        cols_to_exclude = {'PK_Datetime', 'DateKey', 'TimeKey', 'Date', 'Time', 'datetime_temp', 'Date_Time_Raw', 'S'}
         target_cols = [c for c in df_clean.columns if c not in cols_to_exclude]
         for col in target_cols:
             df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
@@ -63,7 +67,8 @@ class EnginePerapihData:
             ('RH', 'RH (%) 33'): (0, 100),
             ('DD', 'Mag WD (deg) 33'): (0, 360),
             ('FF', 'WS (kt) 33'): (0, 150),
-            ('STAP', 'MSLP', 'QFE (hPa) 33', 'QNH (hPa) 33'): (600, 1150)
+            ('STAP', 'MSLP', 'QFE (hPa) 33', 'QNH (hPa) 33'): (600, 1150),
+            ('GNDT',): (-10, 70)  # QC Suhu Tanah (Ground Temp °C)
         }
         for cols, (vmin, vmax) in qc_limits.items():
             for col in cols:
@@ -87,11 +92,68 @@ class EnginePerapihData:
             missing_dp = df_clean[dp_col].isna()
             df_clean.loc[missing_dp & valid_trh, dp_col] = dp_calc[missing_dp & valid_trh]
 
-        df_clean.drop(columns=['datetime_temp'], inplace=True, errors='ignore')
+        # Reorder Kolom Fact Table: Pindahkan Keys ke paling depan
+        keys = ['PK_Datetime', 'DateKey', 'TimeKey']
+        other_cols = [c for c in df_clean.columns if c not in keys and c != 'datetime_temp']
+        return df_clean[keys + other_cols]
 
-        # Reorder Kolom: Pindahkan PK_Datetime ke paling depan
-        cols = ['PK_Datetime'] + [c for c in df_clean.columns if c != 'PK_Datetime']
-        return df_clean[cols]
+    # --- GENERATOR TABEL DIMENSI POWER BI ---
+    @staticmethod
+    def generate_dim_date(df_clean):
+        if df_clean.empty or 'DateKey' not in df_clean.columns:
+            return pd.DataFrame()
+        
+        dates = pd.to_datetime(df_clean['DateKey'].astype(str), format='%Y%m%d').unique()
+        dim_date = pd.DataFrame({'Date': pd.to_datetime(dates)})
+        dim_date['DateKey'] = dim_date['Date'].dt.strftime('%Y%m%d').astype('int64')
+        dim_date['Year'] = dim_date['Date'].dt.year
+        dim_date['MonthNumber'] = dim_date['Date'].dt.month
+        dim_date['MonthName'] = dim_date['Date'].dt.strftime('%B')
+        dim_date['DayOfMonth'] = dim_date['Date'].dt.day
+        dim_date['DayOfWeek'] = dim_date['Date'].dt.strftime('%A')
+        dim_date['Quarter'] = 'Q' + dim_date['Date'].dt.quarter.astype(str)
+        dim_date['IsWeekend'] = dim_date['Date'].dt.dayofweek.isin([5, 6])
+        dim_date['Timezone'] = 'UTC'
+        
+        cols = ['DateKey', 'Date', 'Year', 'MonthNumber', 'MonthName', 'DayOfMonth', 'DayOfWeek', 'Quarter', 'IsWeekend', 'Timezone']
+        return dim_date[cols]
+
+    @staticmethod
+    def generate_dim_time():
+        time_range = pd.date_range('00:00', '23:59', freq='1min')
+        dim_time = pd.DataFrame({'Time_Obj': time_range})
+        dim_time['TimeKey'] = dim_time['Time_Obj'].dt.strftime('%H%M').astype('int64')
+        dim_time['Time'] = dim_time['Time_Obj'].dt.strftime('%H:%M:00')
+        dim_time['Hour'] = dim_time['Time_Obj'].dt.hour
+        dim_time['Minute'] = dim_time['Time_Obj'].dt.minute
+        dim_time['PeriodOfDay'] = pd.cut(
+            dim_time['Hour'], 
+            bins=[-1, 5, 11, 17, 23], 
+            labels=['Dini Hari', 'Pagi', 'Siang/Sore', 'Malam']
+        )
+        cols = ['TimeKey', 'Time', 'Hour', 'Minute', 'PeriodOfDay']
+        return dim_time[cols]
+
+    @staticmethod
+    def generate_dim_sensor(sensor_labels):
+        qc_limits = {
+            'T': (-50, 60), 'Air Tmp (C) 33': (-50, 60),
+            'RH': (0, 100), 'RH (%) 33': (0, 100),
+            'DD': (0, 360), 'Mag WD (deg) 33': (0, 360),
+            'FF': (0, 150), 'WS (kt) 33': (0, 150),
+            'STAP': (600, 1150), 'MSLP': (600, 1150), 'QFE (hPa) 33': (600, 1150), 'QNH (hPa) 33': (600, 1150),
+            'GNDT': (-10, 70)
+        }
+        rows = []
+        for code, name in sensor_labels.items():
+            vmin, vmax = qc_limits.get(code, (None, None))
+            rows.append({
+                'SensorCode': code,
+                'SensorName': name,
+                'QC_Min_Limit': vmin,
+                'QC_Max_Limit': vmax
+            })
+        return pd.DataFrame(rows)
 
     @staticmethod
     def parse_text_lines(lines, kolom_aws_resmi):
@@ -108,7 +170,7 @@ class EnginePerapihData:
             if 'date' in t0 or 'tgl' in t0 or 'tanggal' in t0 or 'waktu' in t0 or not any(c.isdigit() for c in t0):
                 start_idx = 1
 
-        needed_payload_len = len(kolom_aws_resmi) - 2  # Total kolom minus Date dan Time
+        needed_payload_len = len(kolom_aws_resmi) - 2
         
         for baris in lines[start_idx:]:
             tokens = baris.strip().split()
@@ -122,7 +184,6 @@ class EnginePerapihData:
                 date_val, time_val = tokens[0], '00:00:00'
                 remaining = tokens[1:]
             
-            # Batch padding super cepat (O(1)) menggantikan while-loop
             pad_len = needed_payload_len - len(remaining)
             if pad_len > 0:
                 remaining.extend([''] * pad_len)
@@ -142,7 +203,6 @@ class EnginePerapihData:
             cols = ['Date', 'Total Menit Log'] + [f'{sensor_labels[s]} (%)' for s in valid_sensors] + ['PERSENTASE TOTAL KESELURUHAN (%)']
             return pd.DataFrame(columns=cols)
 
-        # Matriks Agregasi Tervektorisasi (Tanpa Iterasi Baris)
         counts = valid_df.groupby('Date', sort=False).size().rename('Total Menit Log')
         valid_counts = valid_df.groupby('Date', sort=False)[valid_sensors].count()
         
@@ -172,87 +232,53 @@ class EnginePerapihData:
         return summary_df
 
     @staticmethod
-    def simpan_ke_excel_bytes(df_data, df_summary, data_sheet_name):
+    def simpan_ke_excel_bytes(df_data, df_summary, data_sheet_name, sensor_labels):
         output = io.BytesIO()
+        
+        # Inisialisasi Dimensi Tabel Power BI
+        dim_date = EnginePerapihData.generate_dim_date(df_data)
+        dim_time = EnginePerapihData.generate_dim_time()
+        dim_sensor = EnginePerapihData.generate_dim_sensor(sensor_labels)
+
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df_data.to_excel(writer, index=False, sheet_name=data_sheet_name)
             df_summary.to_excel(writer, index=False, sheet_name="Rangkuman_Ketersediaan")
+            dim_date.to_excel(writer, index=False, sheet_name="Dim_Date")
+            dim_time.to_excel(writer, index=False, sheet_name="Dim_Time")
+            dim_sensor.to_excel(writer, index=False, sheet_name="Dim_Sensor")
             
-            # Styling Objects
+            # Formatting Styling
             font_header = Font(name='Arial', size=11, bold=True, color='FFFFFF')
             fill_header = PatternFill(start_color='1F4E78', end_color='1F4E78', fill_type='solid')
             align_header = Alignment(horizontal='center', vertical='center', wrap_text=True)
-            
             font_data = Font(name='Arial', size=10)
             fill_zebra = PatternFill(start_color='F2F5F9', end_color='F2F5F9', fill_type='solid')
             align_center = Alignment(horizontal='center', vertical='center')
-            align_left = Alignment(horizontal='left', vertical='center')
-            
-            font_total = Font(name='Arial', size=11, bold=True, color='000000')
-            fill_total = PatternFill(start_color='D9E1F2', end_color='D9E1F2', fill_type='solid')
-            
             side_thin = Side(style='thin', color='D9D9D9')
             border_thin = Border(left=side_thin, right=side_thin, top=side_thin, bottom=side_thin)
-            border_total = Border(left=side_thin, right=side_thin, top=side_thin, bottom=Side(style='double', color='000000'))
 
-            # --- 1. FORMAT SHEET DATA UTAMA ---
-            ws_data = writer.sheets[data_sheet_name]
-            ws_data.freeze_panes = 'A2'
-            ws_data.auto_filter.ref = ws_data.dimensions
-            ws_data.row_dimensions[1].height = 28
-            
-            for cell in ws_data[1]:
-                cell.font, cell.fill, cell.alignment, cell.border = font_header, fill_header, align_header, border_thin
+            # Styling untuk semua sheet
+            for sheetname in [data_sheet_name, "Rangkuman_Ketersediaan", "Dim_Date", "Dim_Time", "Dim_Sensor"]:
+                ws = writer.sheets[sheetname]
+                ws.freeze_panes = 'A2'
+                ws.row_dimensions[1].height = 28
+                
+                for cell in ws[1]:
+                    cell.font, cell.fill, cell.alignment, cell.border = font_header, fill_header, align_header, border_thin
 
-            max_row_data = ws_data.max_row
-            max_col_data = ws_data.max_column
-            for r_idx, row in enumerate(ws_data.iter_rows(min_row=2, max_row=max_row_data, max_col=max_col_data), start=2):
-                ws_data.row_dimensions[r_idx].height = 20
-                is_even = (r_idx % 2 == 0)
-                for cell in row:
-                    cell.font = font_data
-                    cell.border = border_thin
-                    if is_even: cell.fill = fill_zebra
-                    cell.alignment = align_center
+                for r_idx, row in enumerate(ws.iter_rows(min_row=2, max_row=ws.max_row, max_col=ws.max_column), start=2):
+                    ws.row_dimensions[r_idx].height = 20
+                    is_even = (r_idx % 2 == 0)
+                    for cell in row:
+                        cell.font = font_data
+                        cell.border = border_thin
+                        if is_even: cell.fill = fill_zebra
+                        cell.alignment = align_center
 
-            # Auto-Fit Lebar Kolom Cepat
-            for idx, col in enumerate(df_data.columns, 1):
-                s_col = df_data[col].dropna().astype(str)
-                max_len = max(s_col.str.len().max() if not s_col.empty else 0, len(str(col)))
-                ws_data.column_dimensions[get_column_letter(idx)].width = min(max(max_len + 4, 14), 50)
-
-            # --- 2. FORMAT SHEET RANGKUMAN ---
-            ws_sum = writer.sheets["Rangkuman_Ketersediaan"]
-            ws_sum.freeze_panes = 'A2'
-            if not df_summary.empty:
-                ws_sum.auto_filter.ref = ws_sum.dimensions
-            ws_sum.row_dimensions[1].height = 28
-            
-            max_row_sum = ws_sum.max_row
-            max_col_sum = ws_sum.max_column
-            
-            for r_idx, row in enumerate(ws_sum.iter_rows(min_row=1, max_row=max_row_sum, max_col=max_col_sum), start=1):
-                is_total_row = (r_idx == max_row_sum) and (max_row_sum > 1)
-                ws_sum.row_dimensions[r_idx].height = 24 if is_total_row else 20
-
-                for c_idx, cell in enumerate(row, start=1):
-                    if r_idx == 1:
-                        cell.font, cell.fill, cell.alignment, cell.border = font_header, fill_header, align_header, border_thin
-                    elif is_total_row:
-                        cell.font, cell.fill, cell.border = font_total, fill_total, border_total
-                        cell.alignment = align_left if c_idx == 1 else align_center
-                        if c_idx > 2: cell.number_format = '0.00"%"'
-                    else:
-                        cell.font, cell.border = font_data, border_thin
-                        if r_idx % 2 == 0: cell.fill = fill_zebra
-                        cell.alignment = align_left if c_idx == 1 else align_center
-                        if c_idx > 2: cell.number_format = '0.00"%"'
-
-            for idx, col in enumerate(df_summary.columns, 1):
-                s_col = df_summary[col].astype(str)
-                max_len = max(s_col.str.len().max() if not df_summary.empty else 0, len(str(col)))
-                if idx > 2: max_len += 5
-                ws_sum.column_dimensions[get_column_letter(idx)].width = min(max(max_len + 4, 15), 50)
+                for col in ws.columns:
+                    col_letter = get_column_letter(col[0].column)
+                    max_len = max(len(str(cell.value or '')) for cell in col)
+                    ws.column_dimensions[col_letter].width = min(max(max_len + 4, 14), 50)
 
         return output.getvalue()
 
@@ -309,7 +335,7 @@ class EnginePerapihData:
 
 
 # --- INTERFASE PENGGUNA (STREAMLIT UI) ---
-st.title("🌤️ Pengolah Data ALOPTAMA")
+st.title("🌤️ Pengolah Data ALOPTAMA (UTC Basis)")
 st.caption("Aplikasi Rekapitulasikan Data AWOS & AWS Strengthening - By Luqmanul Hakim, S.Tr")
 
 tab_awos, tab_fdb, tab_aws = st.tabs([
@@ -335,7 +361,7 @@ with tab_awos:
         if not files_awos:
             st.error("Silakan upload minimal satu file AWOS!")
         else:
-            with st.spinner("Memproses, Menyelaraskan Waktu, & Melakukan Quality Control AWOS..."):
+            with st.spinner("Memproses, Menyelaraskan Waktu UTC, & QC AWOS..."):
                 list_df = []
                 for fp in files_awos:
                     if fp.name.endswith(('.xlsx', '.xls')):
@@ -366,19 +392,19 @@ with tab_awos:
                 df_all = pd.concat(list_df, ignore_index=True)
                 df_clean = EnginePerapihData.normalize_dataframe(df_all)
                 df_summary = EnginePerapihData.buat_rangkuman_per_sensor(df_clean, awos_labels)
-                excel_bytes = EnginePerapihData.simpan_ke_excel_bytes(df_clean, df_summary, "Data_AWOS_Clean")
+                excel_bytes = EnginePerapihData.simpan_ke_excel_bytes(df_clean, df_summary, "Fact_AWOS_Data", awos_labels)
                 
-                st.success("✅ Data AWOS Berhasil Diproses!")
+                st.success("✅ Data AWOS Berhasil Diproses dengan Dimensi Power BI!")
                 st.download_button(
-                    label="⬇️ Download Excel AWOS Clean",
+                    label="⬇️ Download Excel AWOS Clean + Power BI DIMs",
                     data=excel_bytes,
-                    file_name="AWOS_Gabungan_Clean.xlsx",
+                    file_name="AWOS_PowerBI_Ready.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
 
 # --- TAB 2: FDB TO CSV ---
 with tab_fdb:
-    st.subheader("Ekstrak Database Firebird AWS (.FDB) Kilat ke CSV")
+    st.subheader("Ekstrak Database Firebird AWS (.FDB) Kilat ke CSV (UTC)")
     fdb_file = st.file_uploader("Upload File Database Firebird (.FDB)", type=['fdb'], key="fdb_single")
     
     if st.button("⚡ Ekstrak Kilat ke CSV", key="btn_fdb"):
@@ -395,7 +421,7 @@ with tab_fdb:
                 st.download_button(
                     label="⬇️ Download Hasil CSV",
                     data=csv_bytes,
-                    file_name="AWS_Ekstrak_FDB.csv",
+                    file_name="AWS_Ekstrak_FDB_UTC.csv",
                     mime="text/csv"
                 )
 
@@ -415,7 +441,7 @@ with tab_aws:
         if not files_aws:
             st.error("Silakan upload minimal satu file AWS!")
         else:
-            with st.spinner("Memproses & Merekonstruksi Data AWS..."):
+            with st.spinner("Memproses & Merekonstruksi Data AWS (UTC Basis)..."):
                 list_df = []
                 for fp in files_aws:
                     ext = fp.name.lower()
@@ -439,12 +465,12 @@ with tab_aws:
                 df_all = pd.concat(list_df, ignore_index=True)
                 df_clean = EnginePerapihData.normalize_dataframe(df_all)
                 df_summary = EnginePerapihData.buat_rangkuman_per_sensor(df_clean, aws_labels)
-                excel_bytes = EnginePerapihData.simpan_ke_excel_bytes(df_clean, df_summary, "Data_AWS_Clean")
+                excel_bytes = EnginePerapihData.simpan_ke_excel_bytes(df_clean, df_summary, "Fact_AWS_Data", aws_labels)
                 
-                st.success("✅ Data AWS Berhasil Diproses!")
+                st.success("✅ Data AWS Berhasil Diproses dengan Dimensi Power BI!")
                 st.download_button(
-                    label="⬇️ Download Excel AWS Clean",
+                    label="⬇️ Download Excel AWS Clean + Power BI DIMs",
                     data=excel_bytes,
-                    file_name="AWS_Gabungan_Clean.xlsx",
+                    file_name="AWS_PowerBI_Ready.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
