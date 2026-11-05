@@ -21,8 +21,8 @@ MAX_WIND_SPEED_KT = 25.0  # Batas maksimum ketat kecepatan angin (ws <= 25 kt)
 # --- LOAD DAN GABUNGKAN SECOND DATASET HISTORIS ---
 @st.cache_data
 def load_historical_pibal():
-    fn_raw = 'Raw Pibal 2024-05-15 to 2026-08-16.csv'
-    fn_data = 'Data Pibal 2024-05-15 to 2026-08-16.csv'
+    fn_raw = 'Raw Pibal 2024-05-15 to 2026-11-03.csv'
+    fn_data = 'Data Pibal 2024-05-15 to 2026-11-03.csv'
     
     def find_file(filename):
         possible_paths = [
